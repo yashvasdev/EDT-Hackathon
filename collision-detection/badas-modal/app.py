@@ -56,7 +56,7 @@ image = (
 
 @app.cls(
     image=image,
-    gpu="L4",
+    gpu="A100",
     scaledown_window=300,
     secrets=[huggingface_secret],
 )

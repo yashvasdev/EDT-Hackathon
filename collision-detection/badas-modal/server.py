@@ -126,7 +126,10 @@ def create_app(model, device: str) -> FastAPI:
     async def predict_ws(websocket: WebSocket):
         await websocket.accept()
         buffer = FrameBuffer()
-        logger.info("WebSocket connection accepted")
+        client = websocket.client
+        client_addr = f"{client.host}:{client.port}" if client else "unknown"
+        logger.info("Device connected: %s", client_addr)
+        logger.info("Headers: %s", dict(websocket.headers))
 
         try:
             while True:
@@ -137,6 +140,7 @@ def create_app(model, device: str) -> FastAPI:
                     try:
                         frame = decode_jpeg_frame(message["bytes"])
                     except ValueError:
+                        logger.warning("Failed to decode JPEG frame from %s", client_addr)
                         await websocket.send_json({"error": "Failed to decode frame"})
                         continue
 
@@ -146,12 +150,20 @@ def create_app(model, device: str) -> FastAPI:
                         prediction = run_inference(model, buffer.get_frames(), device)
                         prediction["frame_index"] = buffer.frame_count
                         prediction["timestamp"] = buffer.frame_count / TARGET_FPS
+                        logger.info(
+                            "Prediction for %s [frame %d]: risk=%s prob=%.3f",
+                            client_addr,
+                            buffer.frame_count,
+                            prediction["risk_level"],
+                            prediction["probability"],
+                        )
                         await websocket.send_json(prediction)
 
                 elif "text" in message and message["text"]:
                     # Text message: control command
                     try:
                         control = json.loads(message["text"])
+                        logger.info("Control message from %s: %s", client_addr, control)
                         if "stride" in control:
                             buffer.stride = control["stride"]
                             await websocket.send_json(
@@ -161,9 +173,12 @@ def create_app(model, device: str) -> FastAPI:
                             buffer.reset()
                             await websocket.send_json({"control": "ok", "reset": True})
                     except json.JSONDecodeError:
+                        logger.warning("Invalid JSON from %s: %s", client_addr, message["text"])
                         await websocket.send_json({"error": "Invalid JSON"})
 
         except WebSocketDisconnect:
-            logger.info("WebSocket disconnected")
+            logger.info(
+                "Device disconnected: %s (processed %d frames)", client_addr, buffer.frame_count
+            )
 
     return app
