@@ -1,0 +1,2 @@
+# Install on the machine where you run `modal deploy` (your laptop), not inside the image.
+modal>=0.64
