@@ -37,7 +37,8 @@ image = (
 app = modal.App("guardcam-stream")
 
 
-@app.function(image=image)
+# Default Modal function timeout is 300s — WebSockets stay open one invocation; raise for streaming.
+@app.function(image=image, timeout=60 * 60 * 2)  # 2 hours per phone session
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app(label="guardcam-ws")
 def guardcam_asgi():
