@@ -52,6 +52,7 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 | `ALERT_COOLDOWN_SEC` | `5` | Minimum seconds between alerts |
 | `DROWSINESS_ONLY_FRONT` | `0` | Set to `1` to skip YOLO on `camera: back` (road) and treat as awake |
 | `GUARDCAM_E2E` | `0` | Test only: skip model load; use with `scripts/e2e_ws_test.py` — **do not deploy** |
+| `GUARDCAM_BACKEND` | `mediapipe` | `yolo` = HuggingFace `mosesb/drowsiness-detection-yolo-cls`; default matches `drowsyness-detection/detect.py` heuristics. Modal: set when running `modal deploy` (see `modal_app.py`) |
 
 ## Integration (hand off to mobile)
 

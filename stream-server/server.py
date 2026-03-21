@@ -15,6 +15,7 @@ Environment variables:
     ALERT_COOLDOWN_SEC - Seconds before another alert (default: 5)
     DROWSINESS_ONLY_FRONT - If 1/true, skip YOLO on back camera (road) frames (default: 0)
     GUARDCAM_E2E - If 1/true, skip model load; valid JPEG frames classify as drowsy (for automated E2E tests only)
+    GUARDCAM_BACKEND - mediapipe (default) | yolo — mediapipe matches drowsyness-detection/detect.py heuristics; yolo = HuggingFace classifier
 """
 
 import asyncio
@@ -76,14 +77,21 @@ CONSECUTIVE_FRAMES = _env_int("CONSECUTIVE_FRAMES", 3)
 ALERT_COOLDOWN_SEC = _env_float("ALERT_COOLDOWN_SEC", 5.0)
 DROWSINESS_ONLY_FRONT = _env_bool("DROWSINESS_ONLY_FRONT", False)
 GUARDCAM_E2E = _env_bool("GUARDCAM_E2E", False)
+GUARDCAM_BACKEND = os.environ.get("GUARDCAM_BACKEND", "mediapipe").strip().lower()
+if GUARDCAM_BACKEND not in ("yolo", "mediapipe"):
+    GUARDCAM_BACKEND = "mediapipe"
 
 # Model (loaded on startup)
 model = None
 
 
 def load_model():
-    """Download and load the YOLO drowsiness classification model."""
+    """Download and load the YOLO drowsiness classification model (skipped for mediapipe backend)."""
     global model
+    if GUARDCAM_BACKEND == "mediapipe":
+        print("📷 Backend: MediaPipe (no YOLO download — Face Mesh per connection)")
+        return
+
     if not YOLO_AVAILABLE:
         print("⚠️  Skipping model load (ultralytics not installed)")
         return
@@ -168,6 +176,12 @@ async def process_session(
     """Core session loop: JSON frames in, JSON lines out (WebSocket-agnostic)."""
     print(f"\n✅ Phone connected from {client_addr}")
 
+    mp_tracker = None
+    if (not GUARDCAM_E2E) and GUARDCAM_BACKEND == "mediapipe":
+        from mediapipe_backend import MediaPipeDrowsinessTracker
+
+        mp_tracker = MediaPipeDrowsinessTracker()
+
     drowsy_streak: deque[bool] = deque(maxlen=CONSECUTIVE_FRAMES)
     last_alert_time = 0.0
     frame_count = 0
@@ -188,6 +202,12 @@ async def process_session(
                 cam = str(camera).lower()
                 if DROWSINESS_ONLY_FRONT and cam == "back":
                     is_drowsy, confidence, class_name = False, 0.0, "Non Drowsy"
+                elif GUARDCAM_E2E:
+                    is_drowsy, confidence, class_name = analyze_frame(frame_data)
+                elif mp_tracker is not None:
+                    is_drowsy, confidence, class_name = mp_tracker.analyze_base64_jpeg(
+                        frame_data
+                    )
                 else:
                     is_drowsy, confidence, class_name = analyze_frame(frame_data)
 
@@ -230,6 +250,11 @@ async def process_session(
                 print(f"  Frame processing error: {e}")
                 continue
     finally:
+        if mp_tracker is not None:
+            try:
+                mp_tracker.close()
+            except Exception:
+                pass
         elapsed = time.time() - start_time
         print(f"\n📱 Phone disconnected. Processed {frame_count} frames in {elapsed:.1f}s")
 
@@ -268,6 +293,7 @@ async def main():
     print(f"    Alert cooldown: {ALERT_COOLDOWN_SEC}s")
     print(f"    Drowsiness only on front camera: {DROWSINESS_ONLY_FRONT}")
     print(f"    E2E test mode: {GUARDCAM_E2E}")
+    print(f"    Backend: {GUARDCAM_BACKEND}")
     print()
     print("  Waiting for phone to connect...")
     print("=" * 50)

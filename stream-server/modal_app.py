@@ -5,9 +5,12 @@ Prerequisites:
   pip install modal
   modal token new   # once, links your Modal account
 
-Deploy (persistent URL):
+Deploy (persistent URL); default backend is **MediaPipe** (teammate heuristics):
   cd stream-server
   modal deploy modal_app.py
+
+YOLO backend (HuggingFace classifier) instead:
+  GUARDCAM_BACKEND=yolo modal deploy modal_app.py
 
 Modal prints a URL like https://YOUR_WORKSPACE--guardcam-ws.modal.run
 Use WebSocket Secure with the same host (Expo accepts wss://):
@@ -20,11 +23,18 @@ See DEPLOY_MODAL.md for details.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import modal
 
 STREAM_SERVER = Path(__file__).resolve().parent
+
+# Default: mediapipe (teammate detect.py heuristics). For YOLO instead:
+#   GUARDCAM_BACKEND=yolo modal deploy modal_app.py
+_DEPLOY_BACKEND = os.environ.get("GUARDCAM_BACKEND", "mediapipe").strip().lower()
+if _DEPLOY_BACKEND not in ("yolo", "mediapipe"):
+    _DEPLOY_BACKEND = "mediapipe"
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -38,7 +48,11 @@ app = modal.App("guardcam-stream")
 
 
 # Default Modal function timeout is 300s — WebSockets stay open one invocation; raise for streaming.
-@app.function(image=image, timeout=60 * 60 * 2)  # 2 hours per phone session
+@app.function(
+    image=image,
+    timeout=60 * 60 * 2,  # 2 hours per phone session
+    env={"GUARDCAM_BACKEND": _DEPLOY_BACKEND},
+)
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app(label="guardcam-ws")
 def guardcam_asgi():
