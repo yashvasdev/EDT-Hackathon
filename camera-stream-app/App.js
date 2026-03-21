@@ -173,14 +173,13 @@ export default function App() {
     isBackCapturingRef.current = true
     try {
       const photo = await backCameraRef.current.takePictureAsync({
-        quality: 0.05,
+        quality: 0.3,
         base64: true,
-        skipProcessing: true,
         exif: false,
         shutterSound: false,
       })
 
-      if (photo?.base64) {
+      if (photo?.base64 && collisionWs.isConnected) {
         collisionWs.send(base64ToBytes(photo.base64))
       }
     } catch (_) {
@@ -265,6 +264,7 @@ export default function App() {
         facing="back"
         animateShutter={false}
         shutterSound={false}
+        pictureSize="640x480"
       >
         <View style={s.overlay}>
           {/* Top bar */}
