@@ -1,0 +1,27 @@
+# Optional: run `python server.py` on your own Linux machine or VPS (not Modal).
+# Copy to /etc/systemd/system/guardcam.service, adjust User/WorkingDirectory, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now guardcam
+#
+# Journal: journalctl -u guardcam -f
+
+[Unit]
+Description=GuardCam WebSocket drowsiness server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/guardcam/stream-server
+Environment=PORT=8765
+# Optional tuning (uncomment as needed):
+# Environment=DROWSY_THRESHOLD=0.6
+# Environment=CONSECUTIVE_FRAMES=3
+# Environment=ALERT_COOLDOWN_SEC=5
+# Environment=DROWSINESS_ONLY_FRONT=1
+ExecStart=/home/ubuntu/guardcam/stream-server/venv/bin/python server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -10,6 +10,11 @@ Usage:
 
 Environment variables:
     PORT - Server port (default: 8765)
+    DROWSY_THRESHOLD - Min confidence for "drowsy" class (default: 0.6)
+    CONSECUTIVE_FRAMES - Drowsy frames in a row before alert (default: 3)
+    ALERT_COOLDOWN_SEC - Seconds before another alert (default: 5)
+    DROWSINESS_ONLY_FRONT - If 1/true, skip YOLO on back camera (road) frames (default: 0)
+    GUARDCAM_E2E - If 1/true, skip model load; valid JPEG frames classify as drowsy (for automated E2E tests only)
 """
 
 import asyncio
@@ -19,6 +24,7 @@ import os
 import sys
 import time
 from collections import deque
+from typing import AsyncIterator, Awaitable, Callable
 
 import numpy as np
 
@@ -33,11 +39,43 @@ except ImportError:
 
 import websockets
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 # Configuration
-PORT = int(os.environ.get("PORT", 8765))
-DROWSY_THRESHOLD = 0.6         # Confidence threshold to consider "drowsy"
-CONSECUTIVE_FRAMES = 3          # Need N consecutive drowsy frames before alerting
-ALERT_COOLDOWN_SEC = 5          # Don't re-alert within this window
+PORT = _env_int("PORT", 8765)
+DROWSY_THRESHOLD = _env_float("DROWSY_THRESHOLD", 0.6)
+CONSECUTIVE_FRAMES = _env_int("CONSECUTIVE_FRAMES", 3)
+ALERT_COOLDOWN_SEC = _env_float("ALERT_COOLDOWN_SEC", 5.0)
+DROWSINESS_ONLY_FRONT = _env_bool("DROWSINESS_ONLY_FRONT", False)
+GUARDCAM_E2E = _env_bool("GUARDCAM_E2E", False)
 
 # Model (loaded on startup)
 model = None
@@ -68,6 +106,21 @@ def analyze_frame(frame_base64):
 
     Returns: (is_drowsy: bool, confidence: float, class_name: str)
     """
+    if GUARDCAM_E2E:
+        try:
+            if "," in frame_base64:
+                frame_base64 = frame_base64.split(",")[1]
+            img_bytes = base64.b64decode(frame_base64)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            import cv2
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is None:
+                return False, 0.0, "Error"
+            return True, 0.95, "Drowsy"
+        except Exception as e:
+            print(f"  Analysis error: {e}")
+            return False, 0.0, "Error"
+
     if model is None:
         # Demo mode — alternate between drowsy/not for testing
         import random
@@ -107,19 +160,21 @@ def analyze_frame(frame_base64):
         return False, 0.0, "Error"
 
 
-async def handle_client(websocket):
-    """Handle a phone connection — receive frames, run detection, send alerts."""
-    client_addr = websocket.remote_address
+async def process_session(
+    client_addr: str,
+    messages: AsyncIterator[str],
+    send_text: Callable[[str], Awaitable[None]],
+) -> None:
+    """Core session loop: JSON frames in, JSON lines out (WebSocket-agnostic)."""
     print(f"\n✅ Phone connected from {client_addr}")
 
-    # Per-client state
-    drowsy_streak = deque(maxlen=CONSECUTIVE_FRAMES)
-    last_alert_time = 0
+    drowsy_streak: deque[bool] = deque(maxlen=CONSECUTIVE_FRAMES)
+    last_alert_time = 0.0
     frame_count = 0
     start_time = time.time()
 
     try:
-        async for message in websocket:
+        async for message in messages:
             try:
                 data = json.loads(message)
                 frame_data = data.get("frame", "")
@@ -130,27 +185,26 @@ async def handle_client(websocket):
 
                 frame_count += 1
 
-                # Run drowsiness detection
-                is_drowsy, confidence, class_name = analyze_frame(frame_data)
+                cam = str(camera).lower()
+                if DROWSINESS_ONLY_FRONT and cam == "back":
+                    is_drowsy, confidence, class_name = False, 0.0, "Non Drowsy"
+                else:
+                    is_drowsy, confidence, class_name = analyze_frame(frame_data)
 
-                # Track consecutive drowsy frames
                 drowsy_streak.append(is_drowsy)
 
-                # Check if we should alert
                 should_alert = False
                 now = time.time()
 
                 if (len(drowsy_streak) >= CONSECUTIVE_FRAMES and
-                    all(drowsy_streak) and
-                    (now - last_alert_time) > ALERT_COOLDOWN_SEC):
+                        all(drowsy_streak) and
+                        (now - last_alert_time) > ALERT_COOLDOWN_SEC):
                     should_alert = True
                     last_alert_time = now
 
-                # Calculate FPS
                 elapsed = time.time() - start_time
                 fps = frame_count / elapsed if elapsed > 0 else 0
 
-                # Send result back to phone
                 response = json.dumps({
                     "drowsy": is_drowsy,
                     "alert": should_alert,
@@ -161,9 +215,8 @@ async def handle_client(websocket):
                     "frame_num": frame_count,
                 })
 
-                await websocket.send(response)
+                await send_text(response)
 
-                # Log periodically
                 if frame_count % 10 == 0:
                     status = "🚨 DROWSY" if is_drowsy else "✅ Awake"
                     print(f"  Frame {frame_count} | {status} ({confidence:.1%}) | {fps:.1f} FPS")
@@ -176,18 +229,30 @@ async def handle_client(websocket):
             except Exception as e:
                 print(f"  Frame processing error: {e}")
                 continue
-
-    except websockets.exceptions.ConnectionClosed:
-        pass
     finally:
         elapsed = time.time() - start_time
         print(f"\n📱 Phone disconnected. Processed {frame_count} frames in {elapsed:.1f}s")
 
 
+async def handle_client(websocket):
+    """websockets library handler (local `python server.py`)."""
+
+    async def message_iter():
+        async for m in websocket:
+            yield m
+
+    try:
+        await process_session(str(websocket.remote_address), message_iter(), websocket.send)
+    except websockets.exceptions.ConnectionClosed:
+        pass
+
+
 async def main():
     """Start the WebSocket server."""
-    # Load YOLO model on startup
-    load_model()
+    if GUARDCAM_E2E:
+        print("🧪 GUARDCAM_E2E=1 — skipping YOLO load (automated tests only)")
+    else:
+        load_model()
 
     print()
     print("=" * 50)
@@ -201,6 +266,8 @@ async def main():
     print(f"    Drowsy threshold: {DROWSY_THRESHOLD:.0%}")
     print(f"    Consecutive frames: {CONSECUTIVE_FRAMES}")
     print(f"    Alert cooldown: {ALERT_COOLDOWN_SEC}s")
+    print(f"    Drowsiness only on front camera: {DROWSINESS_ONLY_FRONT}")
+    print(f"    E2E test mode: {GUARDCAM_E2E}")
     print()
     print("  Waiting for phone to connect...")
     print("=" * 50)
