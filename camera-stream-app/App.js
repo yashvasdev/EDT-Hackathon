@@ -7,21 +7,22 @@ import {
     StatusBar,
     Vibration,
     Platform,
-    Image,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useWebSocket } from './hooks/useWebSocket';
 import {
     FRAME_INTERVAL_MS,
-    DISPLAY_INTERVAL_MS,
     DROWSINESS_WS_URL,
     COLLISION_WS_URL,
 } from './constants';
 
 let BackgroundCameraModule = null;
+let BackgroundCameraView = null;
 if (Platform.OS === 'android') {
     try {
-        BackgroundCameraModule = require('./modules/background-camera').BackgroundCameraModule;
+        const mod = require('./modules/background-camera');
+        BackgroundCameraModule = mod.BackgroundCameraModule;
+        BackgroundCameraView = mod.BackgroundCameraView;
     } catch (_) {}
 }
 
@@ -41,9 +42,6 @@ export default function App() {
     // --- Collision state (back camera) ---
     const [collisionConfidence, setCollisionConfidence] = useState(0);
     const [collisionFps, setCollisionFps] = useState(0);
-
-    // --- Front camera PiP frame ---
-    const [frontFrame, setFrontFrame] = useState(null);
 
     // --- Streaming ---
     const [isStreaming, setIsStreaming] = useState(false);
@@ -66,7 +64,7 @@ export default function App() {
             setConcurrentReason(result.reason);
 
             if (result.supported) {
-                const captureResult = await BackgroundCameraModule.startCapture(DISPLAY_INTERVAL_MS);
+                const captureResult = await BackgroundCameraModule.startCapture(FRAME_INTERVAL_MS);
                 started = captureResult.started;
                 if (!captureResult.started) {
                     console.warn('[BackgroundCamera] Failed to start:', captureResult.reason);
@@ -115,22 +113,17 @@ export default function App() {
         onMessage: handleCollisionMessage,
     });
 
-    // --- Front camera frames from native module -> PiP + drowsiness WS ---
+    // --- Front camera frames from native module -> drowsiness WS ---
     const drowsinessWsRef = useRef(drowsinessWs);
     drowsinessWsRef.current = drowsinessWs;
     const isStreamingRef = useRef(isStreaming);
     isStreamingRef.current = isStreaming;
 
-    const lastWsSendRef = useRef(0);
-
     useEffect(() => {
         if (!BackgroundCameraModule) return;
 
         const frameSub = BackgroundCameraModule.addListener('onFrame', (event) => {
-            setFrontFrame(event.base64);
-            const now = Date.now();
-            if (isStreamingRef.current && now - lastWsSendRef.current >= FRAME_INTERVAL_MS) {
-                lastWsSendRef.current = now;
+            if (isStreamingRef.current) {
                 drowsinessWsRef.current.send({
                     frame: event.base64,
                     camera: 'front',
@@ -339,13 +332,10 @@ export default function App() {
                 )}
             </CameraView>
 
-            {/* Front camera PiP - shows latest frame from native module */}
-            {frontFrame && (
+            {/* Front camera PiP - native TextureView for smooth live preview */}
+            {BackgroundCameraView && concurrentSupported && (
                 <View style={s.pipContainer}>
-                    <Image
-                        source={{ uri: `data:image/jpeg;base64,${frontFrame}` }}
-                        style={s.pipImage}
-                    />
+                    <BackgroundCameraView style={s.pipPreview} />
                     <View style={s.pipLabel}>
                         <Text style={s.pipLabelText}>Driver</Text>
                     </View>
@@ -482,7 +472,7 @@ const s = StyleSheet.create({
         borderWidth: 2,
         borderColor: 'rgba(255,255,255,0.6)',
     },
-    pipImage: {
+    pipPreview: {
         width: 160,
         height: 120,
     },

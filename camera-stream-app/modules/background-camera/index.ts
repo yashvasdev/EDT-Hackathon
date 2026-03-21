@@ -1,1 +1,1 @@
-export { BackgroundCameraModule } from './src';
+export { BackgroundCameraModule, BackgroundCameraView } from './src';

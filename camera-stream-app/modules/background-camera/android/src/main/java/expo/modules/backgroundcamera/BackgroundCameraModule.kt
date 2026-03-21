@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.graphics.Rect
+import android.graphics.SurfaceTexture
 import android.graphics.YuvImage
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -16,6 +17,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Base64
+import android.view.Surface
+import android.view.TextureView
 import androidx.core.content.ContextCompat
 
 import expo.modules.kotlin.modules.Module
@@ -34,6 +37,10 @@ class BackgroundCameraModule : Module() {
     private var lastFrameTime = 0L
     private var frameIntervalMs = 500L
 
+    // Preview surface provided by BackgroundCameraView
+    internal var previewSurface: Surface? = null
+    internal var previewTextureView: TextureView? = null
+
     private val context: Context
         get() = requireNotNull(appContext.reactContext)
 
@@ -42,6 +49,9 @@ class BackgroundCameraModule : Module() {
         Name("BackgroundCamera")
 
         Events("onFrame", "onError")
+
+        // Native view for live preview
+        View(BackgroundCameraView::class) {}
 
         AsyncFunction("checkConcurrentSupport") {
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -61,7 +71,6 @@ class BackgroundCameraModule : Module() {
                 )
             }
 
-            // Find a pair that contains both a front and back camera
             var frontId: String? = null
             var backId: String? = null
 
@@ -112,7 +121,6 @@ class BackgroundCameraModule : Module() {
 
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
 
-            // Find front camera
             var frontCameraId: String? = null
             for (id in cameraManager.cameraIdList) {
                 val chars = cameraManager.getCameraCharacteristics(id)
@@ -192,12 +200,20 @@ class BackgroundCameraModule : Module() {
         }, backgroundHandler)
     }
 
-    private fun createCaptureSession() {
+    internal fun createCaptureSession() {
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
 
+        val surfaces = mutableListOf(reader.surface)
+
+        // Add preview surface if available
+        val preview = previewSurface
+        if (preview != null) {
+            surfaces.add(preview)
+        }
+
         device.createCaptureSession(
-            listOf(reader.surface),
+            surfaces,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
@@ -205,6 +221,9 @@ class BackgroundCameraModule : Module() {
 
                     val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                         addTarget(reader.surface)
+                        if (preview != null) {
+                            addTarget(preview)
+                        }
                     }.build()
 
                     session.setRepeatingRequest(request, null, backgroundHandler)
@@ -217,6 +236,25 @@ class BackgroundCameraModule : Module() {
             },
             backgroundHandler
         )
+    }
+
+    // Called by BackgroundCameraView when its TextureView surface is ready
+    internal fun onPreviewSurfaceReady(surface: Surface) {
+        previewSurface = surface
+        // If camera is already open, recreate the session to include the preview surface
+        if (cameraDevice != null && isCapturing) {
+            captureSession?.close()
+            createCaptureSession()
+        }
+    }
+
+    internal fun onPreviewSurfaceDestroyed() {
+        previewSurface = null
+        // Recreate session without preview surface if camera is still running
+        if (cameraDevice != null && isCapturing) {
+            captureSession?.close()
+            createCaptureSession()
+        }
     }
 
     private fun yuvToBase64Jpeg(image: android.media.Image, quality: Int): String {
@@ -252,6 +290,7 @@ class BackgroundCameraModule : Module() {
         cameraDevice = null
         imageReader?.close()
         imageReader = null
+        previewSurface = null
         backgroundThread?.quitSafely()
         backgroundThread = null
         backgroundHandler = null
