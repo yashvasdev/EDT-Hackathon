@@ -13,6 +13,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useWebSocket } from './hooks/useWebSocket';
 import {
     FRAME_INTERVAL_MS,
+    DISPLAY_INTERVAL_MS,
     DROWSINESS_WS_URL,
     COLLISION_WS_URL,
 } from './constants';
@@ -50,7 +51,7 @@ export default function App() {
     const backIntervalRef = useRef(null);
     const isBackCapturingRef = useRef(false);
 
-    // --- Check concurrent support on mount ---
+    // --- Check concurrent support and start front camera on mount ---
     useEffect(() => {
         if (Platform.OS !== 'android' || !BackgroundCameraModule) {
             setConcurrentSupported(false);
@@ -58,10 +59,26 @@ export default function App() {
             return;
         }
 
-        BackgroundCameraModule.checkConcurrentSupport().then((result) => {
+        let started = false;
+
+        BackgroundCameraModule.checkConcurrentSupport().then(async (result) => {
             setConcurrentSupported(result.supported);
             setConcurrentReason(result.reason);
+
+            if (result.supported) {
+                const captureResult = await BackgroundCameraModule.startCapture(DISPLAY_INTERVAL_MS);
+                started = captureResult.started;
+                if (!captureResult.started) {
+                    console.warn('[BackgroundCamera] Failed to start:', captureResult.reason);
+                }
+            }
         });
+
+        return () => {
+            if (started) {
+                BackgroundCameraModule.stopCapture();
+            }
+        };
     }, []);
 
     const triggerAlarm = useCallback(() => {
@@ -98,17 +115,28 @@ export default function App() {
         onMessage: handleCollisionMessage,
     });
 
-    // --- Front camera frames from native module -> drowsiness WS ---
+    // --- Front camera frames from native module -> PiP + drowsiness WS ---
+    const drowsinessWsRef = useRef(drowsinessWs);
+    drowsinessWsRef.current = drowsinessWs;
+    const isStreamingRef = useRef(isStreaming);
+    isStreamingRef.current = isStreaming;
+
+    const lastWsSendRef = useRef(0);
+
     useEffect(() => {
         if (!BackgroundCameraModule) return;
 
         const frameSub = BackgroundCameraModule.addListener('onFrame', (event) => {
             setFrontFrame(event.base64);
-            drowsinessWs.send({
-                frame: event.base64,
-                camera: 'front',
-                timestamp: event.timestamp,
-            });
+            const now = Date.now();
+            if (isStreamingRef.current && now - lastWsSendRef.current >= FRAME_INTERVAL_MS) {
+                lastWsSendRef.current = now;
+                drowsinessWsRef.current.send({
+                    frame: event.base64,
+                    camera: 'front',
+                    timestamp: event.timestamp,
+                });
+            }
         });
 
         const errorSub = BackgroundCameraModule.addListener('onError', (event) => {
@@ -119,7 +147,7 @@ export default function App() {
             frameSub.remove();
             errorSub.remove();
         };
-    }, [drowsinessWs]);
+    }, []);
 
     // --- Back camera frame capture (via expo-camera CameraView) ---
     const captureAndSendBack = useCallback(async () => {
@@ -148,7 +176,7 @@ export default function App() {
         }
     }, [collisionWs]);
 
-    const startStreaming = useCallback(async () => {
+    const startStreaming = useCallback(() => {
         if (!collisionWs.isConnected || !drowsinessWs.isConnected) return;
 
         setIsStreaming(true);
@@ -156,27 +184,15 @@ export default function App() {
 
         // Start back camera interval (expo-camera)
         backIntervalRef.current = setInterval(captureAndSendBack, FRAME_INTERVAL_MS);
+    }, [collisionWs, drowsinessWs, captureAndSendBack]);
 
-        // Start front camera capture (native module)
-        if (BackgroundCameraModule && concurrentSupported) {
-            const result = await BackgroundCameraModule.startCapture(FRAME_INTERVAL_MS);
-            if (!result.started) {
-                console.warn('[BackgroundCamera] Failed to start:', result.reason);
-            }
-        }
-    }, [collisionWs, drowsinessWs, captureAndSendBack, concurrentSupported]);
-
-    const stopStreaming = useCallback(async () => {
+    const stopStreaming = useCallback(() => {
         if (backIntervalRef.current) {
             clearInterval(backIntervalRef.current);
             backIntervalRef.current = null;
         }
         isBackCapturingRef.current = false;
         setIsStreaming(false);
-
-        if (BackgroundCameraModule) {
-            await BackgroundCameraModule.stopCapture();
-        }
     }, []);
 
     // --- Connect / Disconnect both ---
@@ -185,8 +201,8 @@ export default function App() {
         collisionWs.connect();
     }, [drowsinessWs, collisionWs]);
 
-    const disconnectAll = useCallback(async () => {
-        await stopStreaming();
+    const disconnectAll = useCallback(() => {
+        stopStreaming();
         drowsinessWs.disconnect();
         collisionWs.disconnect();
         setIsDrowsy(false);
