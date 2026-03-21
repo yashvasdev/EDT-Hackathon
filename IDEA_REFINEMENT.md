@@ -36,7 +36,8 @@ The phone **streams both camera feeds** over WiFi/USB to a computer, which runs 
 
 ### 1. Drowsiness Detection (Front Camera → Driver)
 
-- **Eye Aspect Ratio (EAR) tracking** — detect when eyes close for too long
+- **YOLO Classification Model** — a pretrained YOLOv8 classification model (`mosesb/drowsiness-detection-yolo-cls`) that classifies frames as "Drowsy" or "Non Drowsy" (**already working! see below**)
+- **Eye Aspect Ratio (EAR) tracking** — complementary detection for when eyes close for too long
 - **Yawn detection** — detect open-mouth yawns as early drowsiness signs
 - **Head pose estimation** — detect head nodding or tilting
 - **Graduated alert system:**
@@ -166,15 +167,46 @@ Since ML runs on the computer, we can use **full-power models** and **Python** f
 
 ---
 
+## 🔬 Current Progress (What's Been Built)
+
+Your teammate has already started building the **drowsiness detection** component!
+
+### `drowsyness-detection/` — YOLO Drowsiness Classifier
+
+| Item | Details |
+|------|---------|
+| **Python version** | 3.12 |
+| **Package manager** | `uv` (lockfile present) |
+| **Key dependencies** | `ultralytics` (YOLOv8), `kagglehub`, `huggingface-hub` |
+| **Dataset** | [Driver Drowsiness Dataset (DDD)](https://www.kaggle.com/datasets/ismailnasri20/driver-drowsiness-dataset-ddd) from Kaggle — face images labeled "Drowsy" / "Non Drowsy" |
+| **Model** | Pretrained YOLOv8 classification model from HuggingFace: `mosesb/drowsiness-detection-yolo-cls` |
+| **Status** | ✅ Working! Tested on sample image — predicted "Drowsy" with **100% confidence** |
+
+#### What the notebook does (`data_exploration.ipynb`):
+1. Downloads the Kaggle drowsiness dataset
+2. Downloads a pretrained YOLO classification model from HuggingFace
+3. Runs inference on a sample driver face image
+4. Successfully classifies it as "Drowsy" with 1.0 confidence
+
+#### What's still needed:
+- [ ] Connect this model to a **live camera stream** (receive frames from phone)
+- [ ] Integrate **audio alarm** when drowsiness is detected
+- [ ] Add frame-by-frame processing loop (not just single image)
+- [ ] Handle consecutive frame logic (e.g., alert only after N drowsy frames in a row)
+- [ ] Package into a runnable Python server script (not just a notebook)
+
+---
+
 ## ❓ Remaining Questions
 
 These don't block us from starting, but answers would help prioritize:
 
 1. **How long is the hackathon?** — Determines scope of what we can build.
-2. **Android or iOS phone?** — Affects which streaming apps are available. Android has more options.
-3. **Does your team know Python?** — Since ML runs on the computer, Python is the easiest path.
-4. **Will you have a laptop available during the demo?** — Needed for the server.
-5. **Back camera faces the road ahead (through windshield), correct?** — Just confirming the mount orientation.
+    5 hours, need to be done asap 
+3. **Will you have a laptop available during the demo?** — Needed for the server.
+yes
+4. **Back camera faces the road ahead (through windshield), correct?** — Just confirming the mount orientation.
+yes
 
 ---
 
@@ -188,16 +220,25 @@ These don't block us from starting, but answers would help prioritize:
 
 ---
 
-## 📋 Suggested MVP Scope (Hackathon-Realistic)
+## 📋 Updated MVP Scope
 
-### Must Have ✅
-- [ ] Front camera drowsiness detection (EAR + yawn)
-- [ ] Audio alarm when drowsiness is detected
-- [ ] Clean UI showing detection status
+### Already Done ✅
+- [x] Drowsiness classification model (YOLO) — working, tested on dataset
+- [x] Dataset sourced (Kaggle Driver Drowsiness Dataset)
+- [x] Python project setup with `uv`
+
+### Must Build Next 🔴
+- [ ] Phone → Computer camera streaming setup (IP Webcam or custom app)
+this is what I want to start working on right now, help me set up a streamining process from the phone to the computer, I am not really sure where the stream needs to go to right now but for now just to try to get the stream from mobile up, I want to use React Native to build a simple app that can stream the camera feed to the computer, I am not really sure how to do this, so I need your help to set it up, I have a mac and the computer is a windows machine, I am not sure if this matters but I thought I should mention it, I know there is two ways to stream, Web RTC and web sockets, I know web rtc is really really complicated and I want to stay away from this essepcially because we have like 4 -5 ish hours, also how would I test if this stream is working?
+
+- [ ] Live frame processing server (Python script that receives stream + runs YOLO model)
+- [ ] Audio alarm trigger when drowsiness detected
+- [ ] Consecutive frame logic (alert after N drowsy frames, not single frame)
 
 ### Should Have 🎯
-- [ ] Back camera road monitoring with basic vehicle detection
+- [ ] Back camera road monitoring (vehicle detection with YOLOv8)
 - [ ] Lane departure / vehicle intrusion alert
+- [ ] Simple dashboard UI showing live feeds + alert status
 
 ### Nice to Have 💫
 - [ ] Incident clip saving
