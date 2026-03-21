@@ -1,0 +1,1 @@
+export { BackgroundCameraModule } from './src';

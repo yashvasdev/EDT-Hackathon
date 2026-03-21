@@ -6,6 +6,7 @@ import {
     TouchableOpacity,
     StatusBar,
     Vibration,
+    Platform,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -15,8 +16,19 @@ import {
     COLLISION_WS_URL,
 } from './constants';
 
+let BackgroundCameraModule = null;
+if (Platform.OS === 'android') {
+    try {
+        BackgroundCameraModule = require('./modules/background-camera').BackgroundCameraModule;
+    } catch (_) {}
+}
+
 export default function App() {
     const [permission, requestPermission] = useCameraPermissions();
+
+    // --- Concurrent camera support ---
+    const [concurrentSupported, setConcurrentSupported] = useState(null); // null = unchecked
+    const [concurrentReason, setConcurrentReason] = useState('');
 
     // --- Drowsiness state (front camera) ---
     const [isDrowsy, setIsDrowsy] = useState(false);
@@ -30,12 +42,23 @@ export default function App() {
 
     // --- Streaming ---
     const [isStreaming, setIsStreaming] = useState(false);
-    const frontCameraRef = useRef(null);
     const backCameraRef = useRef(null);
-    const frontIntervalRef = useRef(null);
     const backIntervalRef = useRef(null);
-    const isFrontCapturingRef = useRef(false);
     const isBackCapturingRef = useRef(false);
+
+    // --- Check concurrent support on mount ---
+    useEffect(() => {
+        if (Platform.OS !== 'android' || !BackgroundCameraModule) {
+            setConcurrentSupported(false);
+            setConcurrentReason('Background camera module only available on Android.');
+            return;
+        }
+
+        BackgroundCameraModule.checkConcurrentSupport().then((result) => {
+            setConcurrentSupported(result.supported);
+            setConcurrentReason(result.reason);
+        });
+    }, []);
 
     const triggerAlarm = useCallback(() => {
         setShowAlert(true);
@@ -71,13 +94,35 @@ export default function App() {
         onMessage: handleCollisionMessage,
     });
 
-    // --- Frame capture helpers ---
-    const captureAndSend = useCallback(async (cameraRef, ws, facing, isCapturingRef) => {
-        if (!cameraRef.current || isCapturingRef.current) return;
+    // --- Front camera frames from native module -> drowsiness WS ---
+    useEffect(() => {
+        if (!BackgroundCameraModule) return;
 
-        isCapturingRef.current = true;
+        const frameSub = BackgroundCameraModule.addListener('onFrame', (event) => {
+            drowsinessWs.send({
+                frame: event.base64,
+                camera: 'front',
+                timestamp: event.timestamp,
+            });
+        });
+
+        const errorSub = BackgroundCameraModule.addListener('onError', (event) => {
+            console.warn('[BackgroundCamera]', event.message);
+        });
+
+        return () => {
+            frameSub.remove();
+            errorSub.remove();
+        };
+    }, [drowsinessWs]);
+
+    // --- Back camera frame capture (via expo-camera CameraView) ---
+    const captureAndSendBack = useCallback(async () => {
+        if (!backCameraRef.current || isBackCapturingRef.current) return;
+
+        isBackCapturingRef.current = true;
         try {
-            const photo = await cameraRef.current.takePictureAsync({
+            const photo = await backCameraRef.current.takePictureAsync({
                 quality: 0.05,
                 base64: true,
                 skipProcessing: true,
@@ -85,48 +130,48 @@ export default function App() {
             });
 
             if (photo?.base64) {
-                ws.send({
+                collisionWs.send({
                     frame: photo.base64,
-                    camera: facing,
+                    camera: 'back',
                     timestamp: Date.now(),
                 });
             }
         } catch (_) {
-            // skip silently, e.g. if app is backgrounded
+            // skip silently
         } finally {
-            isCapturingRef.current = false;
+            isBackCapturingRef.current = false;
         }
-    }, []);
+    }, [collisionWs]);
 
-    const startStreaming = useCallback(() => {
-        if (!drowsinessWs.isConnected || !collisionWs.isConnected) return;
+    const startStreaming = useCallback(async () => {
+        if (!collisionWs.isConnected || !drowsinessWs.isConnected) return;
 
         setIsStreaming(true);
-        isFrontCapturingRef.current = false;
         isBackCapturingRef.current = false;
 
-        frontIntervalRef.current = setInterval(
-            () => captureAndSend(frontCameraRef, drowsinessWs, 'front', isFrontCapturingRef),
-            FRAME_INTERVAL_MS,
-        );
-        backIntervalRef.current = setInterval(
-            () => captureAndSend(backCameraRef, collisionWs, 'back', isBackCapturingRef),
-            FRAME_INTERVAL_MS,
-        );
-    }, [drowsinessWs, collisionWs, captureAndSend]);
+        // Start back camera interval (expo-camera)
+        backIntervalRef.current = setInterval(captureAndSendBack, FRAME_INTERVAL_MS);
 
-    const stopStreaming = useCallback(() => {
-        if (frontIntervalRef.current) {
-            clearInterval(frontIntervalRef.current);
-            frontIntervalRef.current = null;
+        // Start front camera capture (native module)
+        if (BackgroundCameraModule && concurrentSupported) {
+            const result = await BackgroundCameraModule.startCapture(FRAME_INTERVAL_MS);
+            if (!result.started) {
+                console.warn('[BackgroundCamera] Failed to start:', result.reason);
+            }
         }
+    }, [collisionWs, drowsinessWs, captureAndSendBack, concurrentSupported]);
+
+    const stopStreaming = useCallback(async () => {
         if (backIntervalRef.current) {
             clearInterval(backIntervalRef.current);
             backIntervalRef.current = null;
         }
-        setIsStreaming(false);
-        isFrontCapturingRef.current = false;
         isBackCapturingRef.current = false;
+        setIsStreaming(false);
+
+        if (BackgroundCameraModule) {
+            await BackgroundCameraModule.stopCapture();
+        }
     }, []);
 
     // --- Connect / Disconnect both ---
@@ -135,8 +180,8 @@ export default function App() {
         collisionWs.connect();
     }, [drowsinessWs, collisionWs]);
 
-    const disconnectAll = useCallback(() => {
-        stopStreaming();
+    const disconnectAll = useCallback(async () => {
+        await stopStreaming();
         drowsinessWs.disconnect();
         collisionWs.disconnect();
         setIsDrowsy(false);
@@ -178,7 +223,7 @@ export default function App() {
         <View style={s.container}>
             <StatusBar hidden />
 
-            {/* Back camera - fullscreen */}
+            {/* Back camera - fullscreen (expo-camera) */}
             <CameraView ref={backCameraRef} style={s.backCamera} facing="back">
                 <View style={s.overlay}>
                     {/* Top bar */}
@@ -218,6 +263,13 @@ export default function App() {
                                 </>
                             )}
                         </View>
+
+                        {/* Concurrent camera status */}
+                        {concurrentSupported === false && (
+                            <Text style={s.warningText}>
+                                Front camera unavailable: {concurrentReason}
+                            </Text>
+                        )}
 
                         {/* Controls */}
                         <View style={s.controlsRow}>
@@ -265,20 +317,9 @@ export default function App() {
                     </View>
                 )}
             </CameraView>
-
-            {/* Front camera - PiP bottom right */}
-            <View style={s.pipContainer}>
-                <CameraView ref={frontCameraRef} style={s.pipCamera} facing="front" />
-                <View style={s.pipLabel}>
-                    <Text style={s.pipLabelText}>Driver</Text>
-                </View>
-            </View>
         </View>
     );
 }
-
-const PIP_WIDTH = 160;
-const PIP_HEIGHT = 120;
 
 const s = StyleSheet.create({
     container: {
@@ -352,6 +393,15 @@ const s = StyleSheet.create({
         borderRadius: 8,
         overflow: 'hidden',
     },
+    warningText: {
+        color: '#f90',
+        fontSize: 12,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 8,
+        overflow: 'hidden',
+    },
     statusText: {
         color: '#ccc',
         fontSize: 14,
@@ -384,36 +434,5 @@ const s = StyleSheet.create({
         fontSize: 18,
         marginTop: 10,
         opacity: 0.9,
-    },
-
-    // --- PiP (front camera) ---
-    pipContainer: {
-        position: 'absolute',
-        bottom: 20,
-        right: 20,
-        width: PIP_WIDTH,
-        height: PIP_HEIGHT,
-        borderRadius: 12,
-        overflow: 'hidden',
-        borderWidth: 2,
-        borderColor: 'rgba(255,255,255,0.6)',
-    },
-    pipCamera: {
-        width: PIP_WIDTH,
-        height: PIP_HEIGHT,
-    },
-    pipLabel: {
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        paddingVertical: 2,
-        alignItems: 'center',
-    },
-    pipLabelText: {
-        color: '#fff',
-        fontSize: 11,
-        fontWeight: '600',
     },
 });

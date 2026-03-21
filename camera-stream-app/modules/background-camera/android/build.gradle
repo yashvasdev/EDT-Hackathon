@@ -1,0 +1,13 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+android {
+  namespace "expo.modules.backgroundcamera"
+
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
