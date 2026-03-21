@@ -1,0 +1,205 @@
+# 🚛 GuardCam — Smart Phone Dashcam for Driver Safety
+
+> **Hackathon Theme:** A Better Tomorrow
+>
+> **Elevator Pitch:** Turn any smartphone into a two-way AI dashcam that streams to a computer running real-time ML models — protecting drivers from drowsiness AND road hazards.
+
+---
+
+## 🎯 Problem Statement
+
+Long-haul truck drivers and rideshare drivers face two critical dangers:
+
+1. **Drowsy driving** — one of the leading causes of fatal crashes, responsible for ~100,000 crashes/year in the US alone (NHTSA).
+2. **Erratic nearby drivers** — vehicles swerving into their lane, sudden braking, or aggressive lane changes leave little reaction time.
+
+Existing dashcams only *record* incidents. They don't *prevent* them. Commercial drowsiness detection systems (like those from Mobileye or Seeing Machines) cost **$500–$2,000+** and require dedicated hardware.
+
+**Our solution costs $0 in extra hardware** — just mount your phone and connect to a laptop.
+
+---
+
+## 💡 Core Concept
+
+Mount a smartphone on the dashboard so that:
+
+| Camera | Faces | Purpose |
+|--------|-------|---------|
+| **Front (selfie) camera** | The driver | Drowsiness & distraction detection |
+| **Back (main) camera** | The road | Lane intrusion & collision threat detection |
+
+The phone **streams both camera feeds** over WiFi/USB to a computer, which runs the **AI models** and sends **real-time audible alerts** back to the phone (or plays them on the computer's speakers).
+
+---
+
+## 🔑 Key Features
+
+### 1. Drowsiness Detection (Front Camera → Driver)
+
+- **Eye Aspect Ratio (EAR) tracking** — detect when eyes close for too long
+- **Yawn detection** — detect open-mouth yawns as early drowsiness signs
+- **Head pose estimation** — detect head nodding or tilting
+- **Graduated alert system:**
+  - ⚠️ *Mild drowsiness* → gentle chime + "Stay alert" voice prompt
+  - 🚨 *Severe drowsiness* → loud alarm + "Pull over immediately" voice prompt
+  - 📍 Optionally suggest nearest rest stop
+
+### 2. Road Hazard Detection (Back Camera → Road)
+
+- **Lane boundary detection** — understand where your lane is
+- **Vehicle tracking** — detect and track nearby vehicles
+- **Swerve/intrusion detection** — alert when another vehicle is crossing into your lane
+- **Tailgating warning** — alert if a vehicle behind is dangerously close
+- **Graduated alert system:**
+  - ⚠️ *Vehicle drifting* → "Vehicle approaching from [left/right]"
+  - 🚨 *Imminent collision risk* → loud alarm
+
+### 3. Incident Logging (Stretch Goal)
+
+- Auto-save a short video clip when an alert is triggered
+- Timestamp + GPS location logging
+- Exportable incident report
+
+### 4. Dashboard / Stats (Stretch Goal)
+
+- Trip summary: drowsiness events, road hazards detected
+- Drowsiness score over time
+- Heat map of where incidents occurred
+
+---
+
+## 🏗️ High-Level Architecture (Client-Server)
+
+The phone acts as a **camera streamer** only. All heavy ML processing runs on a **computer** (laptop/desktop).
+
+```
+┌──────────────────────┐          ┌─────────────────────────────────────┐
+│   📱 PHONE (Client)  │          │   💻 COMPUTER (Server)              │
+│                      │          │                                     │
+│  ┌────────────────┐  │  WiFi /  │  ┌─────────────────────────────┐   │
+│  │ Front Camera   │──┼──USB ──▶│  │ Face/Eye Detection          │   │
+│  │ (Selfie→Driver)│  │ Stream  │  │ (MediaPipe / dlib)          │   │
+│  └────────────────┘  │          │  └──────────┬──────────────────┘   │
+│                      │          │             │                      │
+│  ┌────────────────┐  │  WiFi /  │  ┌──────────▼──────────────────┐   │
+│  │ Back Camera    │──┼──USB ──▶│  │ Vehicle/Lane Detection      │   │
+│  │ (Main→Road)    │  │ Stream  │  │ (YOLOv8 / OpenCV)           │   │
+│  └────────────────┘  │          │  └──────────┬──────────────────┘   │
+│                      │          │             │                      │
+│  ┌────────────────┐  │  ◀──────│  ┌──────────▼──────────────────┐   │
+│  │ 🔊 Speaker     │  │  Alert  │  │ ALERT ENGINE                │   │
+│  │ (plays alarm)  │  │  Signal │  │ - Threat assessment         │   │
+│  └────────────────┘  │          │  │ - Alert type selection      │   │
+│                      │          │  │ - Incident clip saving      │   │
+│  ┌────────────────┐  │  ◀──────│  └─────────────────────────────┘   │
+│  │ 📊 Status UI   │  │  Status │                                     │
+│  │ (optional)     │  │  Update │  ┌─────────────────────────────┐   │
+│  └────────────────┘  │          │  │ 🖥️ DASHBOARD (optional)    │   │
+│                      │          │  │ - Live annotated feeds      │   │
+└──────────────────────┘          │  │ - Alert log                 │   │
+                                  │  └─────────────────────────────┘   │
+                                  └─────────────────────────────────────┘
+```
+
+### Streaming Options
+
+| Method | Pros | Cons |
+|--------|------|------|
+| **IP Webcam (Android app)** | Free, easy, streams via WiFi | Latency ~100-300ms, WiFi needed |
+| **DroidCam / Iriun** | Acts as USB webcam on PC | Usually single camera only |
+| **Custom app (WebRTC/RTSP)** | Full control, dual stream | More dev work |
+| **USB tethering + ADB** | Low latency, no WiFi needed | Android only, needs USB cable |
+
+---
+
+## 🛠️ Recommended Tech Stack
+
+Since ML runs on the computer, we can use **full-power models** and **Python** for the backend.
+
+| Component | Technology | Notes |
+|-----------|-----------|-------|
+| **Phone Streaming** | IP Webcam app or custom Android app | Streams both cameras via WiFi/USB |
+| **Server (Python)** | Python + OpenCV | Receives video streams, runs ML |
+| **Drowsiness Detection** | MediaPipe Face Mesh + dlib | Eye Aspect Ratio, yawn, head pose |
+| **Road Detection** | YOLOv8 (Ultralytics) + OpenCV | Vehicle detection, lane tracking |
+| **Audio Alerts** | pygame / playsound (on computer) or send alert back to phone | Alarm sounds + voice prompts |
+| **Dashboard UI** | Flask/FastAPI web dashboard or simple OpenCV window | Shows annotated camera feeds + alerts |
+
+---
+
+## ⚠️ Concerns & Technical Risks
+
+### ✅ Resolved by Client-Server Architecture
+
+1. ~~**Dual camera simultaneous access**~~ → **RESOLVED.** Since the phone just streams video, we can use existing apps (IP Webcam) or a simple custom app to stream both feeds. No need for complex multi-camera APIs.
+
+2. ~~**Processing power & heat**~~ → **RESOLVED.** All ML runs on the computer. Phone just streams video — minimal battery/heat impact (still needs car charger for long trips).
+
+### 🔴 Critical (New Concerns)
+
+3. **Streaming latency** — Video streaming over WiFi adds 100-300ms latency on top of ML inference time.
+   - Total round-trip (stream + inference + alert) should stay under ~500ms.
+   - **Mitigation:** Use USB tethering instead of WiFi, compress frames, keep resolution reasonable (720p is enough).
+
+4. **WiFi reliability in a vehicle** — Need a stable connection between phone and laptop.
+   - **Mitigation:** Use USB connection (ADB port forwarding) instead of WiFi for reliability. Or create a phone hotspot → laptop connects to it.
+
+### 🟡 Important
+
+4. **Phone mounting & vibration** — Trucks vibrate a lot. The phone mount must be stable.
+   - Vibration could cause false positives in face detection.
+   - **Mitigation:** Frame smoothing / rolling average to filter out vibration noise.
+
+5. **Lighting conditions** — Nighttime driving, sun glare, tunnel transitions.
+   - Front camera: IR-based detection won't work on phones (no IR camera). Need to handle low-light.
+   - Back camera: Headlights, rain, fog can degrade detection.
+   - **Mitigation:** Image preprocessing (histogram equalization, adaptive brightness).
+
+6. **False positives/negatives** — A false alarm while driving is a distraction. A missed alarm is a safety failure.
+   - Need careful threshold tuning.
+   - **Mitigation:** Graduated alert system, requiring sustained detection before alarming.
+
+### 🟢 Minor
+
+7. **Legal considerations** — Recording/monitoring drivers may have legal implications in some jurisdictions.
+8. **Phone placement uniformity** — Different mounting positions affect camera angles.
+
+---
+
+## ❓ Remaining Questions
+
+These don't block us from starting, but answers would help prioritize:
+
+1. **How long is the hackathon?** — Determines scope of what we can build.
+2. **Android or iOS phone?** — Affects which streaming apps are available. Android has more options.
+3. **Does your team know Python?** — Since ML runs on the computer, Python is the easiest path.
+4. **Will you have a laptop available during the demo?** — Needed for the server.
+5. **Back camera faces the road ahead (through windshield), correct?** — Just confirming the mount orientation.
+
+---
+
+## 🏆 What Makes This a Winning Hackathon Entry
+
+- **Theme alignment** — "A Better Tomorrow" = saving lives on the road
+- **Accessibility** — No special hardware, just a phone everyone already owns
+- **Impact** — Targets truckers, rideshare drivers, long-commute workers
+- **Scalability story** — Could expand to fleet management, insurance discounts, etc.
+- **Demo-ability** — Drowsiness detection is visually impressive in a live demo
+
+---
+
+## 📋 Suggested MVP Scope (Hackathon-Realistic)
+
+### Must Have ✅
+- [ ] Front camera drowsiness detection (EAR + yawn)
+- [ ] Audio alarm when drowsiness is detected
+- [ ] Clean UI showing detection status
+
+### Should Have 🎯
+- [ ] Back camera road monitoring with basic vehicle detection
+- [ ] Lane departure / vehicle intrusion alert
+
+### Nice to Have 💫
+- [ ] Incident clip saving
+- [ ] Trip summary dashboard
+- [ ] GPS integration for rest stop suggestions
