@@ -11,9 +11,8 @@ import {
     Vibration,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Audio } from 'expo-av';
 
-const FRAME_INTERVAL_MS = 200; // ~5 FPS
+const FRAME_INTERVAL_MS = 500; // 2 FPS to prevent overloading phone memory/network
 
 export default function App() {
     const [permission, requestPermission] = useCameraPermissions();
@@ -31,44 +30,17 @@ export default function App() {
     const cameraRef = useRef(null);
     const wsRef = useRef(null);
     const intervalRef = useRef(null);
-    const alarmSoundRef = useRef(null);
 
-    // Load alarm sound on mount
     useEffect(() => {
-        loadAlarmSound();
         return () => {
             stopStreaming();
             disconnectWs();
-            unloadSound();
         };
     }, []);
 
-    const loadAlarmSound = async () => {
-        try {
-            await Audio.setAudioModeAsync({
-                playsInSilentModeIOS: true,
-                staysActiveInBackground: true,
-            });
-            // Use a built-in system-style alert — no external file needed
-            // We'll use Vibration + repeated beep as the alarm
-        } catch (e) {
-            console.log('Audio setup error:', e);
-        }
-    };
-
-    const unloadSound = async () => {
-        if (alarmSoundRef.current) {
-            await alarmSoundRef.current.unloadAsync();
-        }
-    };
-
-    const triggerAlarm = useCallback(async () => {
+    const triggerAlarm = useCallback(() => {
         setShowAlert(true);
-
-        // Vibrate pattern: vibrate 500ms, pause 200ms, repeat 3 times
         Vibration.vibrate([0, 500, 200, 500, 200, 500]);
-
-        // Auto-dismiss alert overlay after 3 seconds
         setTimeout(() => setShowAlert(false), 3000);
     }, []);
 
@@ -84,43 +56,35 @@ export default function App() {
         }
 
         setStatus('Connecting...');
-
         const ws = new WebSocket(url);
 
         ws.onopen = () => {
             setIsConnected(true);
-            setStatus('Connected! Tap "Start Streaming" to begin.');
+            setStatus('Connected! Tap "Start Monitoring" to begin.');
             wsRef.current = ws;
         };
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-
-                // Update detection state
                 setIsDrowsy(data.drowsy || false);
                 setConfidence(data.confidence || 0);
                 setServerFps(data.fps || 0);
-
-                // Trigger alarm if server says to alert
                 if (data.alert) {
                     triggerAlarm();
                 }
-            } catch (e) {
-                // Ignore parse errors
-            }
+            } catch (e) { }
         };
 
         ws.onclose = () => {
             setIsConnected(false);
             setIsStreaming(false);
-            setStatus('Disconnected. Reconnect to continue.');
+            setStatus('Disconnected.');
             stopStreaming();
         };
 
-        ws.onerror = (error) => {
-            setStatus('Connection failed. Check the URL and try again.');
-            console.log('WebSocket error:', error.message);
+        ws.onerror = () => {
+            setStatus('Connection failed. Check URL and try again.');
         };
     }, [serverUrl, triggerAlarm]);
 
@@ -135,44 +99,46 @@ export default function App() {
         stopStreaming();
     }, []);
 
+    const isCapturingRef = useRef(false);
+
     const captureAndSendFrame = useCallback(async () => {
         if (!cameraRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
             return;
         }
 
+        // Prevent concurrent captures if the previous one is still taking time
+        if (isCapturingRef.current) return;
+
+        isCapturingRef.current = true;
+
         try {
             const photo = await cameraRef.current.takePictureAsync({
-                quality: 0.3,
+                quality: 0.05, // Extremely low quality for smallest base64 size (YOLO size is 640x640 anyway)
                 base64: true,
-                skipProcessing: true,
+                skipProcessing: true, // Crucial for speed
                 exif: false,
             });
 
             if (photo?.base64 && wsRef.current?.readyState === WebSocket.OPEN) {
-                const message = JSON.stringify({
+                wsRef.current.send(JSON.stringify({
                     frame: photo.base64,
                     camera: facing,
                     timestamp: Date.now(),
-                });
-
-                wsRef.current.send(message);
-                setFrameCount((prev) => prev + 1);
+                }));
             }
         } catch (error) {
-            console.log('Frame capture error:', error.message);
+            // skip silently, for example if app is backgrounded
+        } finally {
+            isCapturingRef.current = false;
         }
     }, [facing]);
 
     const startStreaming = useCallback(() => {
-        if (!isConnected) {
-            Alert.alert('Not connected', 'Connect to the server first.');
-            return;
-        }
-
+        if (!isConnected) return;
         setIsStreaming(true);
-        setStatus('🔴 Streaming — monitoring for drowsiness...');
+        setStatus('🔴 Monitoring for drowsiness...');
         setFrameCount(0);
-
+        isCapturingRef.current = false;
         intervalRef.current = setInterval(captureAndSendFrame, FRAME_INTERVAL_MS);
     }, [isConnected, captureAndSendFrame]);
 
@@ -182,132 +148,110 @@ export default function App() {
             intervalRef.current = null;
         }
         setIsStreaming(false);
-        setIsDrowsy(false);
-        if (isConnected) {
-            setStatus('Streaming paused. Tap to resume.');
-        }
-    }, [isConnected]);
+        isCapturingRef.current = false;
+    }, []);
 
     const toggleCamera = useCallback(() => {
         setFacing((prev) => (prev === 'front' ? 'back' : 'front'));
     }, []);
 
-    // Permission handling
+    // --- Permissions ---
     if (!permission) {
-        return <View style={styles.container}><Text style={styles.statusText}>Loading...</Text></View>;
+        return <View style={s.container}><Text style={s.statusText}>Loading...</Text></View>;
     }
-
     if (!permission.granted) {
         return (
-            <View style={styles.container}>
-                <Text style={styles.title}>🚛 GuardCam</Text>
-                <Text style={styles.statusText}>Camera permission is required to monitor for drowsiness</Text>
-                <TouchableOpacity style={styles.button} onPress={requestPermission}>
-                    <Text style={styles.buttonText}>Grant Camera Permission</Text>
+            <View style={s.container}>
+                <Text style={s.title}>🚛 GuardCam</Text>
+                <Text style={s.statusText}>Camera permission is required</Text>
+                <TouchableOpacity style={s.btn} onPress={requestPermission}>
+                    <Text style={s.btnText}>Grant Permission</Text>
                 </TouchableOpacity>
             </View>
         );
     }
 
+    // --- Main UI ---
     return (
-        <View style={styles.container}>
+        <View style={s.container}>
             <StatusBar barStyle="light-content" />
 
-            {/* Camera Preview */}
-            <View style={styles.cameraContainer}>
-                <CameraView
-                    ref={cameraRef}
-                    style={styles.camera}
-                    facing={facing}
-                >
-                    {/* Overlay */}
-                    <View style={styles.overlay}>
-                        <View style={styles.topBar}>
-                            <Text style={styles.title}>🚛 GuardCam</Text>
-                            <View style={styles.topRight}>
+            <View style={s.camWrap}>
+                <CameraView ref={cameraRef} style={s.cam} facing={facing}>
+                    <View style={s.overlay}>
+                        {/* Top bar */}
+                        <View style={s.topBar}>
+                            <Text style={s.title}>🚛 GuardCam</Text>
+                            <View style={s.topRight}>
                                 {isStreaming && (
-                                    <View style={[
-                                        styles.detectionBadge,
-                                        isDrowsy ? styles.badgeDrowsy : styles.badgeAwake
-                                    ]}>
-                                        <Text style={styles.badgeText}>
-                                            {isDrowsy ? '😴 DROWSY' : '👁️ Awake'}
-                                        </Text>
+                                    <View style={[s.badge, isDrowsy ? s.badgeDrowsy : s.badgeAwake]}>
+                                        <Text style={s.badgeText}>{isDrowsy ? '😴 DROWSY' : '👁️ Awake'}</Text>
                                     </View>
                                 )}
-                                <View style={[styles.indicator, isStreaming ? styles.indicatorActive : styles.indicatorInactive]} />
+                                <View style={[s.dot, isStreaming ? s.dotOn : s.dotOff]} />
                             </View>
                         </View>
-
-                        <View style={styles.bottomBar}>
-                            <Text style={styles.cameraLabel}>
-                                {facing === 'front' ? '👤 Driver Cam' : '🛣️ Road Cam'}
-                            </Text>
+                        {/* Bottom bar */}
+                        <View style={s.botBar}>
+                            <Text style={s.camLabel}>{facing === 'front' ? '👤 Driver' : '🛣️ Road'}</Text>
                             {isStreaming && (
-                                <Text style={styles.frameCounter}>
+                                <Text style={s.fps}>
                                     {confidence > 0 ? `${(confidence * 100).toFixed(0)}%` : '...'} | {serverFps} FPS
                                 </Text>
                             )}
                         </View>
                     </View>
 
-                    {/* DROWSY ALERT OVERLAY */}
+                    {/* ALERT OVERLAY */}
                     {showAlert && (
-                        <View style={styles.alertOverlay}>
-                            <Text style={styles.alertIcon}>🚨</Text>
-                            <Text style={styles.alertTitle}>WAKE UP!</Text>
-                            <Text style={styles.alertSubtitle}>Drowsiness detected — stay alert!</Text>
+                        <View style={s.alertOverlay}>
+                            <Text style={s.alertIcon}>🚨</Text>
+                            <Text style={s.alertTitle}>WAKE UP!</Text>
+                            <Text style={s.alertSub}>Drowsiness detected — stay alert!</Text>
                         </View>
                     )}
                 </CameraView>
             </View>
 
             {/* Controls */}
-            <View style={styles.controls}>
-                <Text style={styles.statusText}>{status}</Text>
+            <View style={s.controls}>
+                <Text style={s.statusText}>{status}</Text>
 
-                {/* Server URL Input */}
-                <View style={styles.urlRow}>
-                    <TextInput
-                        style={styles.input}
-                        placeholder="ws://your-server.com:8765"
-                        placeholderTextColor="#666"
-                        value={serverUrl}
-                        onChangeText={setServerUrl}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        editable={!isConnected}
-                    />
-                </View>
+                <TextInput
+                    style={s.input}
+                    placeholder="ws://your-server.com:8765"
+                    placeholderTextColor="#666"
+                    value={serverUrl}
+                    onChangeText={setServerUrl}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!isConnected}
+                />
 
-                {/* Connect / Disconnect */}
-                <View style={styles.buttonRow}>
+                <View style={s.row}>
                     {!isConnected ? (
-                        <TouchableOpacity style={styles.button} onPress={connectWs}>
-                            <Text style={styles.buttonText}>Connect</Text>
+                        <TouchableOpacity style={s.btn} onPress={connectWs}>
+                            <Text style={s.btnText}>Connect</Text>
                         </TouchableOpacity>
                     ) : (
-                        <TouchableOpacity style={[styles.button, styles.buttonDanger]} onPress={disconnectWs}>
-                            <Text style={styles.buttonText}>Disconnect</Text>
+                        <TouchableOpacity style={[s.btn, s.btnRed]} onPress={disconnectWs}>
+                            <Text style={s.btnText}>Disconnect</Text>
                         </TouchableOpacity>
                     )}
-
-                    {/* Flip Camera */}
-                    <TouchableOpacity style={[styles.button, styles.buttonSecondary]} onPress={toggleCamera}>
-                        <Text style={styles.buttonText}>🔄 Flip</Text>
+                    <TouchableOpacity style={[s.btn, s.btnGray]} onPress={toggleCamera}>
+                        <Text style={s.btnText}>🔄 Flip</Text>
                     </TouchableOpacity>
                 </View>
 
-                {/* Stream Controls */}
                 {isConnected && (
-                    <View style={styles.buttonRow}>
+                    <View style={s.row}>
                         {!isStreaming ? (
-                            <TouchableOpacity style={[styles.button, styles.buttonStream]} onPress={startStreaming}>
-                                <Text style={styles.buttonText}>▶ Start Monitoring</Text>
+                            <TouchableOpacity style={[s.btn, s.btnGreen]} onPress={startStreaming}>
+                                <Text style={s.btnText}>▶ Start Monitoring</Text>
                             </TouchableOpacity>
                         ) : (
-                            <TouchableOpacity style={[styles.button, styles.buttonDanger]} onPress={stopStreaming}>
-                                <Text style={styles.buttonText}>⏹ Stop</Text>
+                            <TouchableOpacity style={[s.btn, s.btnRed]} onPress={stopStreaming}>
+                                <Text style={s.btnText}>⏹ Stop</Text>
                             </TouchableOpacity>
                         )}
                     </View>
@@ -317,173 +261,35 @@ export default function App() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#0a0a0a',
-        justifyContent: 'center',
-    },
-    cameraContainer: {
-        flex: 1,
-        overflow: 'hidden',
-    },
-    camera: {
-        flex: 1,
-    },
-    overlay: {
-        flex: 1,
-        justifyContent: 'space-between',
-        padding: 16,
-    },
-    topBar: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginTop: Platform.OS === 'android' ? 30 : 50,
-    },
-    topRight: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-    },
-    bottomBar: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 8,
-    },
-    title: {
-        color: '#fff',
-        fontSize: 22,
-        fontWeight: 'bold',
-        textShadowColor: 'rgba(0,0,0,0.8)',
-        textShadowOffset: { width: 1, height: 1 },
-        textShadowRadius: 4,
-    },
-    indicator: {
-        width: 14,
-        height: 14,
-        borderRadius: 7,
-        borderWidth: 2,
-        borderColor: '#fff',
-    },
-    indicatorActive: {
-        backgroundColor: '#ff3333',
-    },
-    indicatorInactive: {
-        backgroundColor: '#666',
-    },
-    detectionBadge: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 16,
-    },
-    badgeDrowsy: {
-        backgroundColor: 'rgba(220, 38, 38, 0.9)',
-    },
-    badgeAwake: {
-        backgroundColor: 'rgba(22, 163, 74, 0.8)',
-    },
-    badgeText: {
-        color: '#fff',
-        fontWeight: 'bold',
-        fontSize: 14,
-    },
-    cameraLabel: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: 12,
-        overflow: 'hidden',
-    },
-    frameCounter: {
-        color: '#0f0',
-        fontSize: 14,
-        fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier',
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 8,
-        overflow: 'hidden',
-    },
-    // Alert overlay
-    alertOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: 'rgba(220, 38, 38, 0.85)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 100,
-    },
-    alertIcon: {
-        fontSize: 80,
-        marginBottom: 10,
-    },
-    alertTitle: {
-        color: '#fff',
-        fontSize: 48,
-        fontWeight: 'bold',
-        letterSpacing: 4,
-    },
-    alertSubtitle: {
-        color: '#fff',
-        fontSize: 18,
-        marginTop: 10,
-        opacity: 0.9,
-    },
-    // Controls
-    controls: {
-        backgroundColor: '#111',
-        padding: 16,
-        paddingBottom: Platform.OS === 'android' ? 16 : 34,
-    },
-    statusText: {
-        color: '#ccc',
-        fontSize: 14,
-        textAlign: 'center',
-        marginBottom: 12,
-    },
-    urlRow: {
-        marginBottom: 12,
-    },
-    input: {
-        backgroundColor: '#222',
-        color: '#fff',
-        fontSize: 16,
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#444',
-    },
-    buttonRow: {
-        flexDirection: 'row',
-        gap: 10,
-        marginBottom: 8,
-    },
-    button: {
-        flex: 1,
-        backgroundColor: '#2563eb',
-        paddingVertical: 12,
-        borderRadius: 8,
-        alignItems: 'center',
-    },
-    buttonSecondary: {
-        backgroundColor: '#444',
-        flex: 0,
-        paddingHorizontal: 20,
-    },
-    buttonStream: {
-        backgroundColor: '#16a34a',
-    },
-    buttonDanger: {
-        backgroundColor: '#dc2626',
-    },
-    buttonText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
-    },
+const s = StyleSheet.create({
+    container: { flex: 1, backgroundColor: '#0a0a0a', justifyContent: 'center' },
+    camWrap: { flex: 1, overflow: 'hidden' },
+    cam: { flex: 1 },
+    overlay: { flex: 1, justifyContent: 'space-between', padding: 16 },
+    topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 30 },
+    topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    botBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+    title: { color: '#fff', fontSize: 22, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4 },
+    dot: { width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#fff' },
+    dotOn: { backgroundColor: '#f33' },
+    dotOff: { backgroundColor: '#666' },
+    badge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+    badgeDrowsy: { backgroundColor: 'rgba(220,38,38,0.9)' },
+    badgeAwake: { backgroundColor: 'rgba(22,163,74,0.8)' },
+    badgeText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+    camLabel: { color: '#fff', fontSize: 16, fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, overflow: 'hidden' },
+    fps: { color: '#0f0', fontSize: 14, fontFamily: 'monospace', backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, overflow: 'hidden' },
+    alertOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(220,38,38,0.85)', justifyContent: 'center', alignItems: 'center', zIndex: 100 },
+    alertIcon: { fontSize: 80, marginBottom: 10 },
+    alertTitle: { color: '#fff', fontSize: 48, fontWeight: 'bold', letterSpacing: 4 },
+    alertSub: { color: '#fff', fontSize: 18, marginTop: 10, opacity: 0.9 },
+    controls: { backgroundColor: '#111', padding: 16, paddingBottom: 16 },
+    statusText: { color: '#ccc', fontSize: 14, textAlign: 'center', marginBottom: 12 },
+    input: { backgroundColor: '#222', color: '#fff', fontSize: 16, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#444', marginBottom: 12 },
+    row: { flexDirection: 'row', gap: 10, marginBottom: 8 },
+    btn: { flex: 1, backgroundColor: '#2563eb', paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+    btnGray: { backgroundColor: '#444', flex: 0, paddingHorizontal: 20 },
+    btnGreen: { backgroundColor: '#16a34a' },
+    btnRed: { backgroundColor: '#dc2626' },
+    btnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 });
