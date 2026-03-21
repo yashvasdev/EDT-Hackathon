@@ -7,6 +7,7 @@ import {
     StatusBar,
     Vibration,
     Platform,
+    Image,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -39,6 +40,9 @@ export default function App() {
     // --- Collision state (back camera) ---
     const [collisionConfidence, setCollisionConfidence] = useState(0);
     const [collisionFps, setCollisionFps] = useState(0);
+
+    // --- Front camera PiP frame ---
+    const [frontFrame, setFrontFrame] = useState(null);
 
     // --- Streaming ---
     const [isStreaming, setIsStreaming] = useState(false);
@@ -99,6 +103,7 @@ export default function App() {
         if (!BackgroundCameraModule) return;
 
         const frameSub = BackgroundCameraModule.addListener('onFrame', (event) => {
+            setFrontFrame(event.base64);
             drowsinessWs.send({
                 frame: event.base64,
                 camera: 'front',
@@ -317,6 +322,19 @@ export default function App() {
                     </View>
                 )}
             </CameraView>
+
+            {/* Front camera PiP - shows latest frame from native module */}
+            {frontFrame && (
+                <View style={s.pipContainer}>
+                    <Image
+                        source={{ uri: `data:image/jpeg;base64,${frontFrame}` }}
+                        style={s.pipImage}
+                    />
+                    <View style={s.pipLabel}>
+                        <Text style={s.pipLabelText}>Driver</Text>
+                    </View>
+                </View>
+            )}
         </View>
     );
 }
@@ -434,5 +452,36 @@ const s = StyleSheet.create({
         fontSize: 18,
         marginTop: 10,
         opacity: 0.9,
+    },
+
+    // --- PiP (front camera snapshot) ---
+    pipContainer: {
+        position: 'absolute',
+        bottom: 20,
+        right: 20,
+        width: 160,
+        height: 120,
+        borderRadius: 12,
+        overflow: 'hidden',
+        borderWidth: 2,
+        borderColor: 'rgba(255,255,255,0.6)',
+    },
+    pipImage: {
+        width: 160,
+        height: 120,
+    },
+    pipLabel: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        paddingVertical: 2,
+        alignItems: 'center',
+    },
+    pipLabelText: {
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: '600',
     },
 });
