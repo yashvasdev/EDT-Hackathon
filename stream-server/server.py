@@ -101,10 +101,33 @@ def load_model():
         print("   Running in DEMO mode (random predictions)")
 
 
+# Map model class names to our 3 canonical states
+DROWSY_CLASSES = {"drowsy", "sleeping", "closed_eyes"}
+YAWNING_CLASSES = {"yawning", "yawn"}
+DISTRACTED_CLASSES = {"distracted", "looking_away", "phone"}
+AWAKE_CLASSES = {"non drowsy", "awake", "alert", "focused"}
+
+
+def _classify_state(class_name):
+    """Map a model class name to one of: yawning, distracted, awake."""
+    name = class_name.lower().strip()
+    if name in DROWSY_CLASSES:
+        return "drowsy"
+    if name in YAWNING_CLASSES:
+        return "yawning"
+    if name in DISTRACTED_CLASSES:
+        return "distracted"
+    if name in AWAKE_CLASSES:
+        return "awake"
+    # Fallback: treat unknown non-awake classes as distracted
+    return "awake"
+
+
 def analyze_frame(frame_base64):
     """Run drowsiness detection on a base64 JPEG frame.
 
-    Returns: (is_drowsy: bool, confidence: float, class_name: str)
+    Returns: (state: str, confidence: float, class_name: str)
+      state is one of: "drowsy", "yawning", "distracted", "awake"
     """
     if GUARDCAM_E2E:
         try:
@@ -115,18 +138,24 @@ def analyze_frame(frame_base64):
             import cv2
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is None:
-                return False, 0.0, "Error"
-            return True, 0.95, "Drowsy"
+                return "awake", 0.0, "Error"
+            return "drowsy", 0.95, "Drowsy"
         except Exception as e:
             print(f"  Analysis error: {e}")
-            return False, 0.0, "Error"
+            return "awake", 0.0, "Error"
 
     if model is None:
-        # Demo mode — alternate between drowsy/not for testing
+        # Demo mode — cycle through states for testing
         import random
-        is_drowsy = random.random() > 0.7
-        conf = random.uniform(0.5, 1.0)
-        return is_drowsy, conf, "Drowsy" if is_drowsy else "Non Drowsy"
+        r = random.random()
+        if r > 0.8:
+            return "drowsy", random.uniform(0.6, 1.0), "Drowsy"
+        elif r > 0.6:
+            return "yawning", random.uniform(0.5, 0.9), "Yawning"
+        elif r > 0.4:
+            return "distracted", random.uniform(0.5, 0.9), "Distracted"
+        else:
+            return "awake", random.uniform(0.5, 1.0), "Non Drowsy"
 
     try:
         # Decode base64 to image
@@ -141,7 +170,7 @@ def analyze_frame(frame_base64):
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if frame is None:
-            return False, 0.0, "Error"
+            return "awake", 0.0, "Error"
 
         # Run inference
         results = model.predict(frame, verbose=False)
@@ -151,13 +180,16 @@ def analyze_frame(frame_base64):
         top1_conf = float(probs.top1conf)
         class_name = model.names[top1_idx]
 
-        is_drowsy = (class_name.lower() == "drowsy") and (top1_conf >= DROWSY_THRESHOLD)
+        state = _classify_state(class_name)
+        # Only trust non-awake classifications above threshold
+        if state != "awake" and top1_conf < DROWSY_THRESHOLD:
+            state = "awake"
 
-        return is_drowsy, top1_conf, class_name
+        return state, top1_conf, class_name
 
     except Exception as e:
         print(f"  Analysis error: {e}")
-        return False, 0.0, "Error"
+        return "awake", 0.0, "Error"
 
 
 async def process_session(
@@ -168,7 +200,7 @@ async def process_session(
     """Core session loop: JSON frames in, JSON lines out (WebSocket-agnostic)."""
     print(f"\n✅ Phone connected from {client_addr}")
 
-    drowsy_streak: deque[bool] = deque(maxlen=CONSECUTIVE_FRAMES)
+    alert_streak: deque[str] = deque(maxlen=CONSECUTIVE_FRAMES)
     last_alert_time = 0.0
     frame_count = 0
     start_time = time.time()
@@ -187,17 +219,18 @@ async def process_session(
 
                 cam = str(camera).lower()
                 if DROWSINESS_ONLY_FRONT and cam == "back":
-                    is_drowsy, confidence, class_name = False, 0.0, "Non Drowsy"
+                    state, confidence, class_name = "awake", 0.0, "Non Drowsy"
                 else:
-                    is_drowsy, confidence, class_name = analyze_frame(frame_data)
+                    state, confidence, class_name = analyze_frame(frame_data)
 
-                drowsy_streak.append(is_drowsy)
+                alert_streak.append(state)
 
                 should_alert = False
                 now = time.time()
 
-                if (len(drowsy_streak) >= CONSECUTIVE_FRAMES and
-                        all(drowsy_streak) and
+                # Alert when we get CONSECUTIVE_FRAMES of any non-awake state
+                if (len(alert_streak) >= CONSECUTIVE_FRAMES and
+                        all(s != "awake" for s in alert_streak) and
                         (now - last_alert_time) > ALERT_COOLDOWN_SEC):
                     should_alert = True
                     last_alert_time = now
@@ -206,7 +239,7 @@ async def process_session(
                 fps = frame_count / elapsed if elapsed > 0 else 0
 
                 response = json.dumps({
-                    "drowsy": is_drowsy,
+                    "state": state,
                     "alert": should_alert,
                     "confidence": round(confidence, 3),
                     "class": class_name,
@@ -218,11 +251,12 @@ async def process_session(
                 await send_text(response)
 
                 if frame_count % 10 == 0:
-                    status = "🚨 DROWSY" if is_drowsy else "✅ Awake"
+                    labels = {"drowsy": "DROWSY", "yawning": "YAWNING", "distracted": "DISTRACTED", "awake": "Awake"}
+                    status = labels.get(state, state)
                     print(f"  Frame {frame_count} | {status} ({confidence:.1%}) | {fps:.1f} FPS")
 
                 if should_alert:
-                    print(f"  🚨🚨🚨 ALERT SENT — Driver appears drowsy! ({confidence:.1%})")
+                    print(f"  ALERT SENT -- Driver state: {state} ({confidence:.1%})")
 
             except json.JSONDecodeError:
                 continue

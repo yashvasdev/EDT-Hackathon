@@ -11,7 +11,7 @@ const PING_INTERVAL_MS = 15000;
  * @param {string} options.url - WebSocket server URL
  * @param {(data: object) => void} [options.onMessage] - Called with parsed JSON on each server message
  */
-export function useWebSocket({ url, onMessage }) {
+export function useWebSocket({ url, onMessage, label = 'WS' }) {
     const [isConnected, setIsConnected] = useState(false);
     const [status, setStatus] = useState('Disconnected');
 
@@ -58,9 +58,11 @@ export function useWebSocket({ url, onMessage }) {
         }
 
         setStatus('Connecting...');
+        console.log(`[${label}] Opening connection to: ${normalized}`);
         const ws = new WebSocket(normalized);
 
         ws.onopen = () => {
+            console.log(`[${label}] Connection opened successfully`);
             wsRef.current = ws;
             retryIndexRef.current = 0;
             setIsConnected(true);
@@ -71,11 +73,15 @@ export function useWebSocket({ url, onMessage }) {
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
+                console.log(`[${label}] Received:`, JSON.stringify(data));
                 onMessageRef.current?.(data);
-            } catch (_) {}
+            } catch (err) {
+                console.warn(`[${label}] Failed to parse message:`, err.message, 'raw:', typeof event.data, event.data?.length ?? 0);
+            }
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
+            console.log(`[${label}] Connection closed (code: ${event.code}, reason: ${event.reason || 'none'})`);
             wsRef.current = null;
             setIsConnected(false);
 
@@ -98,8 +104,8 @@ export function useWebSocket({ url, onMessage }) {
             }, delay);
         };
 
-        ws.onerror = () => {
-            // onclose will fire after this, which handles reconnect
+        ws.onerror = (err) => {
+            console.error(`[${label}] Connection error:`, err.message || err);
             setStatus('Connection error');
         };
     }, [startPing]);
@@ -126,10 +132,16 @@ export function useWebSocket({ url, onMessage }) {
     const send = useCallback((payload) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
             if (typeof payload === 'string' || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+                const size = payload.byteLength || payload.length || 0;
+                console.log(`[${label}] Sending binary/string payload (${size} bytes)`);
                 wsRef.current.send(payload);
             } else {
-                wsRef.current.send(JSON.stringify(payload));
+                const json = JSON.stringify(payload);
+                console.log(`[${label}] Sending JSON (${json.length} chars):`, json.substring(0, 200));
+                wsRef.current.send(json);
             }
+        } else {
+            console.warn(`[${label}] Send called but socket not open (readyState: ${wsRef.current?.readyState ?? 'null'})`);
         }
     }, []);
 

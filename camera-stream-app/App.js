@@ -15,6 +15,7 @@ import {
   DROWSINESS_WS_URL,
   COLLISION_WS_URL,
 } from "./constants"
+import { initAlertSound, playAlertSound } from "./utils/alertSound"
 
 function base64ToBytes(base64) {
   const raw = atob(base64)
@@ -42,9 +43,10 @@ export default function App() {
   const [concurrentSupported, setConcurrentSupported] = useState(null) // null = unchecked
   const [concurrentReason, setConcurrentReason] = useState("")
 
-  // --- Drowsiness state (front camera) ---
-  const [isDrowsy, setIsDrowsy] = useState(false)
-  const [showAlert, setShowAlert] = useState(false)
+  // --- Driver state (front camera) ---
+  // state: "awake" | "drowsy" | "yawning" | "distracted"
+  const [driverState, setDriverState] = useState("awake")
+  const [alertState, setAlertState] = useState(null) // which state triggered the alert overlay
   const [drowsinessConfidence, setDrowsinessConfidence] = useState(0)
   const [drowsinessFps, setDrowsinessFps] = useState(0)
 
@@ -57,6 +59,11 @@ export default function App() {
   const backCameraRef = useRef(null)
   const backIntervalRef = useRef(null)
   const isBackCapturingRef = useRef(false)
+
+  // --- Preload alert sound on mount ---
+  useEffect(() => {
+    initAlertSound()
+  }, [])
 
   // --- Check concurrent support on mount ---
   useEffect(() => {
@@ -92,20 +99,22 @@ export default function App() {
     }
   }, [concurrentSupported])
 
-  const triggerAlarm = useCallback(() => {
-    setShowAlert(true)
+  const triggerAlarm = useCallback((state) => {
+    setAlertState(state)
     Vibration.vibrate([0, 500, 200, 500, 200, 500])
-    setTimeout(() => setShowAlert(false), 3000)
+    playAlertSound()
+    setTimeout(() => setAlertState(null), 3000)
   }, [])
 
   // --- WebSocket connections ---
   const handleDrowsinessMessage = useCallback(
     (data) => {
-      setIsDrowsy(data.drowsy || false)
+      const state = data.state || "awake"
+      setDriverState(state)
       setDrowsinessConfidence(data.confidence || 0)
       setDrowsinessFps(data.fps || 0)
       if (data.alert) {
-        triggerAlarm()
+        triggerAlarm(state)
       }
     },
     [triggerAlarm],
@@ -125,6 +134,7 @@ export default function App() {
   const collisionWs = useWebSocket({
     url: COLLISION_WS_URL,
     onMessage: handleCollisionMessage,
+    label: "CollisionWS",
   })
 
   // --- Front camera frames from native module -> drowsiness WS ---
@@ -263,10 +273,10 @@ export default function App() {
             <View style={s.topRight}>
               {isStreaming && (
                 <View
-                  style={[s.badge, isDrowsy ? s.badgeDrowsy : s.badgeAwake]}
+                  style={[s.badge, s[`badge_${driverState}`] || s.badge_awake]}
                 >
                   <Text style={s.badgeText}>
-                    {isDrowsy ? "DROWSY" : "Awake"}
+                    {driverState.toUpperCase()}
                   </Text>
                 </View>
               )}
@@ -353,10 +363,23 @@ export default function App() {
         )}
 
         {/* ALERT OVERLAY */}
-        {showAlert && (
-          <View style={s.alertOverlay}>
-            <Text style={s.alertTitle}>WAKE UP!</Text>
-            <Text style={s.alertSub}>Drowsiness detected -- stay alert!</Text>
+        {alertState && (
+          <View
+            style={[
+              s.alertOverlay,
+              s[`alertOverlay_${alertState}`] || s.alertOverlay_drowsy,
+            ]}
+          >
+            <Text style={s.alertTitle}>
+              {alertState === "drowsy" && "WAKE UP!"}
+              {alertState === "yawning" && "STAY ALERT!"}
+              {alertState === "distracted" && "EYES ON ROAD!"}
+            </Text>
+            <Text style={s.alertSub}>
+              {alertState === "drowsy" && "Drowsiness detected -- pull over if needed"}
+              {alertState === "yawning" && "Yawning detected -- take a break soon"}
+              {alertState === "distracted" && "Distraction detected -- focus on driving"}
+            </Text>
           </View>
         )}
       </CameraView>
@@ -433,8 +456,10 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 16,
   },
-  badgeDrowsy: { backgroundColor: "rgba(220,38,38,0.9)" },
-  badgeAwake: { backgroundColor: "rgba(22,163,74,0.8)" },
+  badge_drowsy: { backgroundColor: "rgba(220,38,38,0.9)" },
+  badge_yawning: { backgroundColor: "rgba(234,179,8,0.9)" },
+  badge_distracted: { backgroundColor: "rgba(249,115,22,0.9)" },
+  badge_awake: { backgroundColor: "rgba(22,163,74,0.8)" },
   badgeText: { color: "#fff", fontWeight: "bold", fontSize: 14 },
   collisionText: {
     position: "absolute",
@@ -484,11 +509,13 @@ const s = StyleSheet.create({
   btnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
   alertOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(220,38,38,0.85)",
     justifyContent: "center",
     alignItems: "center",
     zIndex: 100,
   },
+  alertOverlay_drowsy: { backgroundColor: "rgba(220,38,38,0.85)" },
+  alertOverlay_yawning: { backgroundColor: "rgba(234,179,8,0.85)" },
+  alertOverlay_distracted: { backgroundColor: "rgba(249,115,22,0.85)" },
   alertTitle: {
     color: "#fff",
     fontSize: 48,
