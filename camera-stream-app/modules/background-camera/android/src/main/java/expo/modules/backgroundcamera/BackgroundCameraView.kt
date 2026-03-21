@@ -21,6 +21,7 @@ class BackgroundCameraView(context: Context, appContext: AppContext) : ExpoView(
 
         textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                st.setDefaultBufferSize(640, 480)
                 surface = Surface(st)
                 module?.onPreviewSurfaceReady(surface!!)
             }

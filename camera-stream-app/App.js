@@ -49,7 +49,7 @@ export default function App() {
     const backIntervalRef = useRef(null);
     const isBackCapturingRef = useRef(false);
 
-    // --- Check concurrent support and start front camera on mount ---
+    // --- Check concurrent support on mount ---
     useEffect(() => {
         if (Platform.OS !== 'android' || !BackgroundCameraModule) {
             setConcurrentSupported(false);
@@ -57,18 +57,22 @@ export default function App() {
             return;
         }
 
-        let started = false;
-
-        BackgroundCameraModule.checkConcurrentSupport().then(async (result) => {
+        BackgroundCameraModule.checkConcurrentSupport().then((result) => {
             setConcurrentSupported(result.supported);
             setConcurrentReason(result.reason);
+        });
+    }, []);
 
-            if (result.supported) {
-                const captureResult = await BackgroundCameraModule.startCapture(FRAME_INTERVAL_MS);
-                started = captureResult.started;
-                if (!captureResult.started) {
-                    console.warn('[BackgroundCamera] Failed to start:', captureResult.reason);
-                }
+    // --- Start front camera capture after support is confirmed and view has mounted ---
+    useEffect(() => {
+        if (!concurrentSupported || !BackgroundCameraModule) return;
+
+        let started = false;
+
+        BackgroundCameraModule.startCapture(FRAME_INTERVAL_MS).then((result) => {
+            started = result.started;
+            if (!result.started) {
+                console.warn('[BackgroundCamera] Failed to start:', result.reason);
             }
         });
 
@@ -77,7 +81,7 @@ export default function App() {
                 BackgroundCameraModule.stopCapture();
             }
         };
-    }, []);
+    }, [concurrentSupported]);
 
     const triggerAlarm = useCallback(() => {
         setShowAlert(true);

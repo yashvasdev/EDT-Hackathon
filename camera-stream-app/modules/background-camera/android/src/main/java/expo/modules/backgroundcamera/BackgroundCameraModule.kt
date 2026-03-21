@@ -241,19 +241,22 @@ class BackgroundCameraModule : Module() {
     // Called by BackgroundCameraView when its TextureView surface is ready
     internal fun onPreviewSurfaceReady(surface: Surface) {
         previewSurface = surface
-        // If camera is already open, recreate the session to include the preview surface
-        if (cameraDevice != null && isCapturing) {
-            captureSession?.close()
-            createCaptureSession()
+        // Post to background handler to serialize with other camera operations
+        backgroundHandler?.post {
+            if (cameraDevice != null) {
+                captureSession?.close()
+                createCaptureSession()
+            }
         }
     }
 
     internal fun onPreviewSurfaceDestroyed() {
         previewSurface = null
-        // Recreate session without preview surface if camera is still running
-        if (cameraDevice != null && isCapturing) {
-            captureSession?.close()
-            createCaptureSession()
+        backgroundHandler?.post {
+            if (cameraDevice != null) {
+                captureSession?.close()
+                createCaptureSession()
+            }
         }
     }
 
