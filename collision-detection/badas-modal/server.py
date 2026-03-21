@@ -135,8 +135,11 @@ def create_app(model, device: str) -> FastAPI:
             while True:
                 message = await websocket.receive()
 
+                msg_type = message.get("type", "")
+                if msg_type == "websocket.disconnect":
+                    break
+
                 if "bytes" in message and message["bytes"]:
-                    # Binary message: JPEG frame
                     try:
                         frame = decode_jpeg_frame(message["bytes"])
                     except ValueError:
@@ -160,16 +163,18 @@ def create_app(model, device: str) -> FastAPI:
                         await websocket.send_json(prediction)
 
                 elif "text" in message and message["text"]:
-                    # Text message: control command
                     try:
                         control = json.loads(message["text"])
+                        if control.get("ping"):
+                            await websocket.send_json({"pong": True})
+                            continue
                         logger.info("Control message from %s: %s", client_addr, control)
                         if "stride" in control:
                             buffer.stride = control["stride"]
                             await websocket.send_json(
                                 {"control": "ok", "stride": buffer.stride}
                             )
-                        if "reset" in control and control["reset"]:
+                        if control.get("reset"):
                             buffer.reset()
                             await websocket.send_json({"control": "ok", "reset": True})
                     except json.JSONDecodeError:
@@ -177,6 +182,10 @@ def create_app(model, device: str) -> FastAPI:
                         await websocket.send_json({"error": "Invalid JSON"})
 
         except WebSocketDisconnect:
+            pass
+        except Exception:
+            logger.exception("Unexpected error for %s", client_addr)
+        finally:
             logger.info(
                 "Device disconnected: %s (processed %d frames)", client_addr, buffer.frame_count
             )
