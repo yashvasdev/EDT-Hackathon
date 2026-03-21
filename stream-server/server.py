@@ -29,16 +29,9 @@ from typing import AsyncIterator, Awaitable, Callable
 
 import numpy as np
 
-# Try to import YOLO — graceful fallback if not installed yet
-try:
-    from ultralytics import YOLO
-    from huggingface_hub import hf_hub_download
-    YOLO_AVAILABLE = True
-except ImportError:
-    YOLO_AVAILABLE = False
-    print("⚠️  ultralytics/huggingface not installed — running in DEMO mode (no real detection)")
-
 import websockets
+
+# YOLO deps are imported only when GUARDCAM_BACKEND=yolo (avoids Ultralytics init on MediaPipe / Modal).
 
 
 def _env_int(name: str, default: int) -> int:
@@ -92,8 +85,11 @@ def load_model():
         print("📷 Backend: MediaPipe (no YOLO download — Face Mesh per connection)")
         return
 
-    if not YOLO_AVAILABLE:
-        print("⚠️  Skipping model load (ultralytics not installed)")
+    try:
+        from ultralytics import YOLO
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        print("⚠️  Skipping model load (ultralytics/huggingface not installed)")
         return
 
     print("📥 Downloading YOLO drowsiness model from HuggingFace...")
