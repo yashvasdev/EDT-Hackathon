@@ -16,7 +16,7 @@ const FRAME_INTERVAL_MS = 500; // 2 FPS to prevent overloading phone memory/netw
 
 export default function App() {
     const [permission, requestPermission] = useCameraPermissions();
-    const [serverUrl, setServerUrl] = useState('');
+    const [serverUrl, setServerUrl] = useState('wss://anthonyl8--guardcam-ws.modal.run');
     const [isConnected, setIsConnected] = useState(false);
     const [isStreaming, setIsStreaming] = useState(false);
     const [status, setStatus] = useState('Enter server URL and connect');
