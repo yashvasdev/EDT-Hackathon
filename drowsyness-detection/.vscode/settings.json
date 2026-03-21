@@ -1,0 +1,8 @@
+{
+    "python.analysis.autoImportCompletions": false,
+    "python.defaultInterpreterPath": ".venv\\Scripts\\python.exe",
+    "code-runner.runInTerminal": true,
+    "code-runner.executorMap": {
+        "python": "$pythonPath -u $fullFileName"
+    }
+}
