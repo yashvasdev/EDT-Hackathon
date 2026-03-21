@@ -16,6 +16,15 @@ import {
     COLLISION_WS_URL,
 } from './constants';
 
+function base64ToBytes(base64) {
+    const raw = atob(base64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+        bytes[i] = raw.charCodeAt(i);
+    }
+    return bytes;
+}
+
 let BackgroundCameraModule = null;
 let BackgroundCameraView = null;
 if (Platform.OS === 'android') {
@@ -41,7 +50,7 @@ export default function App() {
 
     // --- Collision state (back camera) ---
     const [collisionConfidence, setCollisionConfidence] = useState(0);
-    const [collisionFps, setCollisionFps] = useState(0);
+    const [collisionRisk, setCollisionRisk] = useState('');
 
     // --- Streaming ---
     const [isStreaming, setIsStreaming] = useState(false);
@@ -103,8 +112,9 @@ export default function App() {
     );
 
     const handleCollisionMessage = useCallback((data) => {
-        setCollisionConfidence(data.confidence || 0);
-        setCollisionFps(data.fps || 0);
+        if (data.error) return;
+        setCollisionConfidence(data.probability || 0);
+        setCollisionRisk(data.risk_level || 'unknown');
     }, []);
 
     const drowsinessWs = useWebSocket({
@@ -160,11 +170,7 @@ export default function App() {
             });
 
             if (photo?.base64) {
-                collisionWs.send({
-                    frame: photo.base64,
-                    camera: 'back',
-                    timestamp: Date.now(),
-                });
+                collisionWs.send(base64ToBytes(photo.base64));
             }
         } catch (_) {
             // skip silently
@@ -174,7 +180,7 @@ export default function App() {
     }, [collisionWs]);
 
     const startStreaming = useCallback(() => {
-        if (!collisionWs.isConnected || !drowsinessWs.isConnected) return;
+        if (!collisionWs.isConnected && !drowsinessWs.isConnected) return;
 
         setIsStreaming(true);
         isBackCapturingRef.current = false;
@@ -263,22 +269,13 @@ export default function App() {
                     <View style={s.botBar}>
                         <View style={s.statsRow}>
                             {isStreaming && (
-                                <>
-                                    <Text style={s.fps}>
-                                        Road:{' '}
-                                        {collisionConfidence > 0
-                                            ? `${(collisionConfidence * 100).toFixed(0)}%`
-                                            : '...'}{' '}
-                                        | {collisionFps} FPS
-                                    </Text>
-                                    <Text style={s.fps}>
-                                        Driver:{' '}
-                                        {drowsinessConfidence > 0
-                                            ? `${(drowsinessConfidence * 100).toFixed(0)}%`
-                                            : '...'}{' '}
-                                        | {drowsinessFps} FPS
-                                    </Text>
-                                </>
+                                <Text style={s.fps}>
+                                    Driver:{' '}
+                                    {drowsinessConfidence > 0
+                                        ? `${(drowsinessConfidence * 100).toFixed(0)}%`
+                                        : '...'}{' '}
+                                    | {drowsinessFps} FPS
+                                </Text>
                             )}
                         </View>
 
@@ -307,7 +304,7 @@ export default function App() {
                                     <Text style={s.btnText}>Disconnect</Text>
                                 </TouchableOpacity>
                             )}
-                            {bothConnected &&
+                            {eitherConnected &&
                                 (!isStreaming ? (
                                     <TouchableOpacity
                                         style={[s.btn, s.btnGreen]}
@@ -326,6 +323,22 @@ export default function App() {
                         </View>
                     </View>
                 </View>
+
+                {/* Collision score */}
+                {isStreaming && (
+                    <Text
+                        style={[
+                            s.collisionText,
+                            collisionRisk === 'high'
+                                ? s.collisionTextHigh
+                                : collisionRisk === 'medium'
+                                  ? s.collisionTextMedium
+                                  : s.collisionTextLow,
+                        ]}
+                    >
+                        Collision {(collisionConfidence * 100).toFixed(0)}%
+                    </Text>
+                )}
 
                 {/* ALERT OVERLAY */}
                 {showAlert && (
@@ -411,6 +424,19 @@ const s = StyleSheet.create({
     badgeDrowsy: { backgroundColor: 'rgba(220,38,38,0.9)' },
     badgeAwake: { backgroundColor: 'rgba(22,163,74,0.8)' },
     badgeText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+    collisionText: {
+        position: 'absolute',
+        top: 60,
+        left: 16,
+        fontSize: 28,
+        fontWeight: 'bold',
+        textShadowColor: 'rgba(0,0,0,0.8)',
+        textShadowOffset: { width: 1, height: 1 },
+        textShadowRadius: 4,
+    },
+    collisionTextHigh: { color: '#ff4444' },
+    collisionTextMedium: { color: '#facc15' },
+    collisionTextLow: { color: '#4ade80' },
     fps: {
         color: '#0f0',
         fontSize: 14,

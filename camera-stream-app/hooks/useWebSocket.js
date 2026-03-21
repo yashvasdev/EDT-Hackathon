@@ -58,7 +58,11 @@ export function useWebSocket({ url, onMessage }) {
 
     const send = useCallback((payload) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(typeof payload === 'string' ? payload : JSON.stringify(payload));
+            if (typeof payload === 'string' || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+                wsRef.current.send(payload);
+            } else {
+                wsRef.current.send(JSON.stringify(payload));
+            }
         }
     }, []);
 
