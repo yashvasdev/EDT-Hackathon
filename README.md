@@ -4,7 +4,7 @@
 
 > **Democratizing road safety by turning your everyday smartphone into an advanced, AI-powered dual-camera system.**
 
-![GuardCam Banner](https://img.shields.io/badge/Status-Hackathon_MVP-success) ![React Native](https://img.shields.io/badge/Frontend-React_Native_Expo-blue) ![Python](https://img.shields.io/badge/Backend-Python_YOLO-yellow) ![WebSockets](https://img.shields.io/badge/Streaming-WebSockets-orange)
+![GuardCam Banner](https://img.shields.io/badge/Status-Hackathon_MVP-success) ![React Native](https://img.shields.io/badge/Frontend-React_Native_Expo-blue) ![Python](https://img.shields.io/badge/Backend-Python_MediaPipe-yellow) ![WebSockets](https://img.shields.io/badge/Streaming-WebSockets-orange)
 
 ## 📌 The Problem
 According to the NHTSA, drowsy driving is responsible for over **100,000 crashes** every year. Advanced Driver Monitoring Systems (DMS) exist, but they are incredibly expensive, require professional installation, or are locked behind luxury vehicle price tags.
@@ -25,10 +25,10 @@ We broke this project into a highly-optimized Edge/Cloud distributed system:
    A lightweight standard-issue Expo app. It securely records highly-compressed video frames via the phone's native camera API and pipes them through a high-bandwidth bidirectional WebSocket connection.
    
 2. **The Cloud Brain (Python on Modal GPUs):**
-   A headless WebSocket server designed to handle raw base64 frame data. It decodes the frames in real-time and runs them through a state-of-the-art **HuggingFace YOLO Drowsiness Classification model**. 
+   A headless WebSocket server designed to handle raw base64 frame data. It decodes the frames in real-time and runs them through a deterministic algorithm to classify body language and facial expression. 
    
-3. **The Feedback Loop:**
-   If the computer vision model detects 3 consecutive frames of "Drowsy" behavior over a given confidence threshold (0.6), a JSON alert is instantly fired back over the WebSocket to physically trigger the phone's vibration motor before the driver can get into an accident.
+4. **The Feedback Loop:**
+   If the computer vision model detects five consecutive frames of "Drowsy" behavior over a given confidence threshold (0.75), a JSON alert is instantly fired back over the WebSocket to physically trigger the phone's vibration motor before the driver can get into an accident.
 
 ---
 
@@ -59,5 +59,4 @@ npx expo start
 ## 🛠️ Tech Stack Highlights
 * **[React Native & Expo Camera]** - For capturing hyper-fast, uncompressed image streams straight from the hardware.
 * **[Python & Websockets]** - For building a custom TCP streaming bridge that avoids HTTP overhead.
-* **[Ultralytics YOLO & OpenCV]** - Heavy lifting for computer vision calculations.
-* **[MediaPipe (Optional Testing)]** - Used for drawing complex 468-point 3D face-mesh overlays to test eye-aspect-ratio (EAR) detection limits under the hood.
+* **[MediaPipe & OpenCV]** - Heavy lifting for computer vision calculations. Optionally draws complex 468-point 3D face-mesh overlays to test eye-aspect-ratio (EAR) detection limits under the hood.
